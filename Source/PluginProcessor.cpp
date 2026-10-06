@@ -612,7 +612,9 @@ void VivisectProcessor::clearSampleSlot (int slot)
 // ===========================================================================
 void VivisectProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
-    if (auto xml = soundStateSnapshot().createXml()) copyXmlToBinary (*xml, dest);
+    // Host project/session state includes both sonic parameters and global
+    // VSX_SETTINGS (tooltips, MIDI mappings and exploration locks).
+    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, dest);
 }
 void VivisectProcessor::setStateInformation (const void* data, int size)
 {

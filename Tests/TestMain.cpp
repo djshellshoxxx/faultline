@@ -811,6 +811,7 @@ int main()
             p.triggerSurgeonManual (vsx::S_FREEZE);
             const auto v = runBlocks (p, 30, kBlock, kRate, false, true);
             check (v.finite, "FREEZE output remains finite across blur");
+            check (v.peak > 0.001f, "FREEZE capture remains audible at blur " + String (blur, 2));
             minPeak = jmin (minPeak, v.peak);
             maxPeak = jmax (maxPeak, v.peak);
         }
