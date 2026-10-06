@@ -197,3 +197,8 @@ Known rough edges: the UI monitor reads DSP state without a lock (display only,
 benign); FREEZE loudness needs calibration by ear; the mod-matrix random-walk is
 crude; `Reorder` Euclidean ordering is a front-loaded approximation of
 Bjorklund.
+
+
+## Plain-language overview
+
+New to the project? Start with the [ELI5 guide](ELI5.md).
