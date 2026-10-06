@@ -133,6 +133,8 @@ Each surgeon has **On**, **Mix**, **Prob** (activity probability) and **Route In
 * **Panic Freeze** — freezes the buffer and holds it on the Freeze surgeon.
 * **Decay Over Time** — progressively drives chaos + corruption to maximum across
   `Decay T` seconds.
+* **SCAR** — optional post-rack texture stage. Drive adds bounded soft saturation
+  plus a torn transient edge; Mix blends it against the untreated master signal.
 
 ## Mod matrix
 
@@ -193,10 +195,11 @@ Build order from the brief, and where this tree currently sits:
 9. character presets — **done** (6 vibes)
 10. UI polish + marketing — **first pass**
 
-Known rough edges: the UI monitor reads DSP state without a lock (display only,
-benign); FREEZE loudness needs calibration by ear; the mod-matrix random-walk is
-crude; `Reorder` Euclidean ordering is a front-loaded approximation of
-Bjorklund.
+Current audit notes: the UI monitor reads DSP state without a lock (display only,
+benign); FREEZE loudness still benefits from calibration by ear; the mod-matrix
+random-walk is intentionally simple; `Reorder` Euclidean ordering is a
+front-loaded approximation of Bjorklund. The specimen exporter now supports
+16/24/32-bit PCM WAV and reports filename, folder, duration and selected quality.
 
 
 ## Plain-language overview
