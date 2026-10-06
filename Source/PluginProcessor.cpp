@@ -595,7 +595,7 @@ void VivisectProcessor::loadSampleInto (int slot, const juce::File& file)
 {
     std::unique_ptr<juce::AudioFormatReader> r (formatManager.createReaderFor (file));
     if (r == nullptr) return;
-    const int len = (int) juce::jmin<juce::int64> (r->lengthInSamples, (juce::int64) (sampleRate * 30.0));
+    const int len = (int) std::min<juce::int64> (r->lengthInSamples, (juce::int64) (sampleRate * 30.0));
     if (len < 2) return;
     juce::AudioBuffer<float> tmp ((int) juce::jmax (1u, r->numChannels), len);
     r->read (&tmp, 0, len, 0, true, true);
