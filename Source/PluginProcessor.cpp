@@ -649,7 +649,7 @@ void VivisectProcessor::setTooltipsEnabled (bool on)
     settingsTree().setProperty (kTooltipsProp, on, nullptr);
 }
 
-juce::ValueTree VivisectProcessor::soundStateSnapshot() const
+juce::ValueTree VivisectProcessor::soundStateSnapshot()
 {
     auto state = apvts.copyState();
     const auto settings = state.getChildWithName (kSettingsTag);
