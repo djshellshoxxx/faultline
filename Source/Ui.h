@@ -27,6 +27,10 @@ struct ParamHost
     virtual void beginMidiLearnFor (const juce::String& paramID) = 0;
     virtual int  ccForParam (const juce::String& paramID) const = 0;
     virtual void clearCCForParam (const juce::String& paramID) = 0;
+    virtual bool isParameterLocked (const juce::String& paramID) const = 0;
+    virtual void setParameterLocked (const juce::String& paramID, bool locked) = 0;
+    virtual void clearParameterLocks() = 0;
+    virtual int  lockedParameterCount() const = 0;
 };
 
 // Right-click menu shared by every control: MIDI map / reset / type a value.

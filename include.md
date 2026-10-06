@@ -62,7 +62,9 @@ Self explanitory. this is to help the user understand and learn the controls
 
 # A Randomize feature
 
-The "Randomize" button is a feature that will randomize the settings to give you a unique sound or effect every time. Each time the random button is clicked it will give you a totally new set of settings. After the frist press, each additional press will reset all settings before randomizing.
+RANDOM creates a new sound. The first press randomizes from the current sound; each later press resets unlocked sound parameters to their defaults before randomizing. It never changes input/output trim, buffer size, source selection, MIDI mode or hidden FLATLINE parameters. A parameter lock protects that value from both RANDOM and MUTATE. If every surgeon On parameter is locked off, RANDOM keeps them off and Diagnostics explains that the effect will remain dry.
+
+MUTATE creates a nearby variation using the automatable Mutation Amount control. Amount 0 changes nothing; larger amounts allow wider continuous changes, and discrete or on/off controls change only at the documented thresholds. Infrastructure controls, loaded samples, presets and global user settings remain unchanged.
 
 
 # Other Notes about the build

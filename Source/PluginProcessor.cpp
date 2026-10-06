@@ -71,10 +71,10 @@ float VivisectProcessor::pvMod (const char* pid, int destEnum)
 void VivisectProcessor::triggerSurgeonManual (int i)
 {
     i = juce::jlimit (0, kNumSurgeons - 1, i);
-    rack[i].setParams (pv (sid (i, "p1").toRawUTF8()),
-                       pv (sid (i, "p2").toRawUTF8()),
-                       pv (sid (i, "p3").toRawUTF8()));
-    auto c = scheduler.makeManualContext (pv (sid (i, "p1").toRawUTF8()),
+    rack[i].setParams (pv (sidRaw (i, SP_P1)),
+                       pv (sidRaw (i, SP_P2)),
+                       pv (sidRaw (i, SP_P3)));
+    auto c = scheduler.makeManualContext (pv (sidRaw (i, SP_P1)),
                                           (int) pv (id::sourceSel), pv (id::morph), pv (id::chaos),
                                           60.0 / lastBpm * sampleRate, specimen, analysis);
     rack[i].trigger (c);
@@ -163,12 +163,14 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     modMatrix.setLFO (1, pv (id::lfo2Rate), (int) pv (id::lfo2Shape));
     modMatrix.setMacro (0, pv (id::macro1));
     modMatrix.setMacro (1, pv (id::macro2));
+    static constexpr const char* modSourceIds[kNumModSlots] { "mm1_src", "mm2_src", "mm3_src", "mm4_src" };
+    static constexpr const char* modDestIds[kNumModSlots]   { "mm1_dst", "mm2_dst", "mm3_dst", "mm4_dst" };
+    static constexpr const char* modDepthIds[kNumModSlots]  { "mm1_depth", "mm2_depth", "mm3_depth", "mm4_depth" };
     for (int mIdx = 0; mIdx < kNumModSlots; ++mIdx)
     {
-        const juce::String pre = "mm" + juce::String (mIdx + 1) + "_";
-        modMatrix.setSlot (mIdx, (int) pv ((pre + "src").toRawUTF8()),
-                                 (int) pv ((pre + "dst").toRawUTF8()),
-                                       pv ((pre + "depth").toRawUTF8()));
+        modMatrix.setSlot (mIdx, (int) pv (modSourceIds[mIdx]),
+                                 (int) pv (modDestIds[mIdx]),
+                                       pv (modDepthIds[mIdx]));
     }
     modMatrix.process (n, workBuf.getRMSLevel (0, 0, n));
 
@@ -197,19 +199,19 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     std::array<int,   kNumSurgeons> routeA {};
     for (int s = 0; s < kNumSurgeons; ++s)
     {
-        on[(size_t) s]     = pv (sid (s, "on").toRawUTF8()) > 0.5f;
-        mixA[(size_t) s]   = pv (sid (s, "mix").toRawUTF8());
-        probA[(size_t) s]  = pv (sid (s, "prob").toRawUTF8());
-        p1A[(size_t) s]    = pv (sid (s, "p1").toRawUTF8());
-        routeA[(size_t) s] = (int) pv (sid (s, "route").toRawUTF8());
+        on[(size_t) s]     = pv (sidRaw (s, SP_ON)) > 0.5f;
+        mixA[(size_t) s]   = pv (sidRaw (s, SP_MIX));
+        probA[(size_t) s]  = pv (sidRaw (s, SP_PROB));
+        p1A[(size_t) s]    = pv (sidRaw (s, SP_P1));
+        routeA[(size_t) s] = (int) pv (sidRaw (s, SP_ROUTE));
 
         float q1 = p1A[(size_t) s];
-        float q2 = pv (sid (s, "p2").toRawUTF8());
-        float q3 = pv (sid (s, "p3").toRawUTF8());
-        if (s == S_STUTTER)  q3 = pvMod (sid (0, "p3").toRawUTF8(), 7);
-        if (s == S_GRANULAR) { q2 = pvMod (sid (1, "p2").toRawUTF8(), 8); q3 = pvMod (sid (1, "p3").toRawUTF8(), 9); }
-        if (s == S_CORRUPT)  { q1 = pvMod (sid (3, "p1").toRawUTF8(), 10); q2 = pvMod (sid (3, "p2").toRawUTF8(), 11); }
-        if (s == S_FREEZE)   q3 = pvMod (sid (5, "p3").toRawUTF8(), 12);
+        float q2 = pv (sidRaw (s, SP_P2));
+        float q3 = pv (sidRaw (s, SP_P3));
+        if (s == S_STUTTER)  q3 = pvMod (sidRaw (0, SP_P3), 7);
+        if (s == S_GRANULAR) { q2 = pvMod (sidRaw (1, SP_P2), 8); q3 = pvMod (sidRaw (1, SP_P3), 9); }
+        if (s == S_CORRUPT)  { q1 = pvMod (sidRaw (3, SP_P1), 10); q2 = pvMod (sidRaw (3, SP_P2), 11); }
+        if (s == S_FREEZE)   q3 = pvMod (sidRaw (5, SP_P3), 12);
         rack[s].setParams (q1, q2, q3);
     }
 
@@ -400,7 +402,7 @@ void VivisectProcessor::timerCallback()
 {
     if (midiMapDirty.exchange (false)) writeMidiMapToState();
 
-    const auto state = apvts.copyState();
+    const auto state = soundStateSnapshot();
     juce::String s;
     if (auto xml = state.createXml()) s = xml->toString (juce::XmlElement::TextFormat().singleLine());
     histRing.set (histHead, s);
@@ -417,8 +419,7 @@ void VivisectProcessor::rewindToNormalized (float x)
     if (s.isNotEmpty())
         if (auto xml = juce::XmlDocument::parse (s))
         {
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
-            syncFromStateTree();
+            restoreSoundState (juce::ValueTree::fromXml (*xml));
         }
 }
 
@@ -516,7 +517,7 @@ void VivisectProcessor::saveUserPreset (const juce::String& name)
     auto dir = getUserPresetDir();
     dir.createDirectory();
     const auto file = dir.getChildFile (juce::File::createLegalFileName (name) + ".vsxpreset");
-    if (auto xml = apvts.copyState().createXml()) xml->writeTo (file);
+    if (auto xml = soundStateSnapshot().createXml()) xml->writeTo (file);
 }
 
 std::map<juce::String, float> VivisectProcessor::factoryPreset (int index) const
@@ -613,6 +614,8 @@ void VivisectProcessor::clearSampleSlot (int slot)
 // ===========================================================================
 void VivisectProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
+    // Host project/session state includes both sonic parameters and global
+    // VSX_SETTINGS (tooltips, MIDI mappings and exploration locks).
     if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, dest);
 }
 void VivisectProcessor::setStateInformation (const void* data, int size)
@@ -633,6 +636,7 @@ void VivisectProcessor::setStateInformation (const void* data, int size)
 static const juce::Identifier kSettingsTag  { "VSX_SETTINGS" };
 static const juce::Identifier kTooltipsProp { "tooltips" };
 static const juce::Identifier kMidiMapProp  { "midiMap" };
+static const juce::Identifier kLocksProp    { "randomLocks" };
 
 juce::ValueTree VivisectProcessor::settingsTree()
 {
@@ -647,6 +651,32 @@ bool VivisectProcessor::tooltipsEnabled() const
 void VivisectProcessor::setTooltipsEnabled (bool on)
 {
     settingsTree().setProperty (kTooltipsProp, on, nullptr);
+}
+
+juce::ValueTree VivisectProcessor::soundStateSnapshot()
+{
+    auto state = apvts.copyState();
+    const auto settings = state.getChildWithName (kSettingsTag);
+    if (settings.isValid())
+        state.removeChild (settings, nullptr);
+    return state;
+}
+
+void VivisectProcessor::restoreSoundState (const juce::ValueTree& source)
+{
+    if (! source.isValid())
+        return;
+
+    auto next = source.createCopy();
+    const auto incomingSettings = next.getChildWithName (kSettingsTag);
+    if (incomingSettings.isValid())
+        next.removeChild (incomingSettings, nullptr);
+
+    const auto currentSettings = apvts.state.getChildWithName (kSettingsTag);
+    if (currentSettings.isValid())
+        next.addChild (currentSettings.createCopy(), -1, nullptr);
+
+    apvts.replaceState (next);
 }
 
 // ===========================================================================
@@ -687,7 +717,20 @@ juce::StringArray VivisectProcessor::detectMisconfiguration() const
             ++surgeonsOn;
 
     if (surgeonsOn == 0)
-        notes.add ("No surgeons are switched on - the plugin will pass audio through untouched.");
+    {
+        bool everySurgeonLockedOff = true;
+        for (int s = 0; s < vsx::kNumSurgeons; ++s)
+        {
+            const auto onID = vsx::sid (s, "on");
+            const auto* parameter = apvts.getParameter (onID);
+            if (parameter != nullptr && (parameter->getValue() > 0.5f || ! isParameterLocked (onID)))
+                everySurgeonLockedOff = false;
+        }
+
+        notes.add (everySurgeonLockedOff
+            ? "All surgeons are off and locked. RANDOM will preserve those locks, so no surgeon can be enabled until a lock is removed."
+            : "No surgeons are switched on - the plugin will pass audio through untouched.");
+    }
 
     if (pvc (vsx::id::dryWet) < 0.01f)
         notes.add ("DRY / WET is fully dry, so none of the processing is audible.");
@@ -884,6 +927,11 @@ void VivisectProcessor::hardResetAllSettings()
     // 3. drop the settings subtree (tool tips and friends) so it rebuilds
     //    from defaults rather than carrying a bad value forward
     apvts.state.removeChild (apvts.state.getChildWithName (kSettingsTag), nullptr);
+    parameterLocks.clear();
+
+    // Rebuild documented defaults immediately. A hard reset should leave the
+    // plugin usable now, not only after the next state reload.
+    seedDefaultMidiMap();
 
     // 4. forget loaded samples and the A/B snapshots
     clearSampleSlot (0);
@@ -941,6 +989,14 @@ void VivisectProcessor::syncFromStateTree()
     for (auto& c : ccToParam) c.store (-1);
 
     const auto t = apvts.state.getChildWithName (kSettingsTag);
+    parameterLocks.clear();
+    juce::StringArray locks;
+    if (t.isValid())
+        locks.addTokens (t.getProperty (kLocksProp).toString(), ";", "");
+    for (const auto& pid : locks)
+        if (apvts.getParameter (pid) != nullptr && ! parameterLocks.contains (pid))
+            parameterLocks.add (pid);
+
     if (! t.isValid() || ! t.hasProperty (kMidiMapProp))
     {
         seedDefaultMidiMap();
@@ -956,6 +1012,7 @@ void VivisectProcessor::syncFromStateTree()
         const int idx = paramIndexFor (pid);
         if (idx >= 0 && cc >= 0 && cc < 128) ccToParam[(size_t) cc].store (idx);
     }
+
 }
 
 void VivisectProcessor::beginMidiLearn (const juce::String& paramID)
@@ -992,8 +1049,41 @@ void VivisectProcessor::setCCForParam (const juce::String& paramID, int cc)
 }
 void VivisectProcessor::clearCCForParam (const juce::String& paramID) { setCCForParam (paramID, -1); }
 
+void VivisectProcessor::writeParameterLocksToState()
+{
+    settingsTree().setProperty (kLocksProp, parameterLocks.joinIntoString (";"), nullptr);
+}
+
+void VivisectProcessor::setParameterLocked (const juce::String& paramID, bool locked)
+{
+    if (apvts.getParameter (paramID) == nullptr)
+        return;
+
+    if (locked)
+    {
+        if (! parameterLocks.contains (paramID))
+            parameterLocks.add (paramID);
+    }
+    else
+    {
+        parameterLocks.removeString (paramID);
+    }
+    writeParameterLocksToState();
+}
+
+bool VivisectProcessor::isParameterLocked (const juce::String& paramID) const
+{
+    return parameterLocks.contains (paramID);
+}
+
+void VivisectProcessor::clearParameterLocks()
+{
+    parameterLocks.clear();
+    writeParameterLocksToState();
+}
+
 // ===========================================================================
-//  Reset + randomise
+//  Reset + randomise + mutate
 // ===========================================================================
 void VivisectProcessor::resetAllToDefaults()
 {
@@ -1005,44 +1095,79 @@ void VivisectProcessor::resetAllToDefaults()
 
 void VivisectProcessor::randomizeAll()
 {
-    // first press randomises from wherever you are; every press after that
-    // wipes back to defaults first, so you always get a clean new specimen
-    if (randomisedOnce) resetAllToDefaults();
+    // Utility and routing state are not part of the generated sound. Preserve
+    // them when subsequent RANDOM presses reset the creative parameters first.
+    std::map<juce::String, float> preserved;
+    if (randomisedOnce)
+    {
+        for (const auto& pid : { id::inputTrim, id::outputTrim, id::bufferBars,
+                                 id::sourceSel, id::midiMode, id::panicFreeze,
+                                 id::decayArm, id::decayTime, id::flatOn,
+                                 id::flatTone, id::flatBleed, id::flatMix })
+            if (auto* p = apvts.getParameter (pid))
+                preserved[pid] = p->getValue();
+
+        for (const auto& pid : parameterLocks)
+            if (auto* p = apvts.getParameter (pid))
+                preserved[pid] = p->getValue();
+        if (auto* p = apvts.getParameter (id::mutationAmount))
+            preserved[id::mutationAmount] = p->getValue();
+
+        resetAllToDefaults();
+
+        for (const auto& kv : preserved)
+            if (auto* p = apvts.getParameter (kv.first))
+                p->setValueNotifyingHost (kv.second);
+    }
     randomisedOnce = true;
 
     auto setNorm = [this] (const juce::String& pid, float v)
     {
-        if (auto* p = apvts.getParameter (pid)) p->setValueNotifyingHost (juce::jlimit (0.f, 1.f, v));
+        if (isParameterLocked (pid) || pid == id::mutationAmount) return;
+        if (auto* p = apvts.getParameter (pid))
+            p->setValueNotifyingHost (juce::jlimit (0.f, 1.f, v));
     };
     auto setChoice = [this] (const juce::String& pid, int idx)
     {
+        if (isParameterLocked (pid)) return;
         if (auto* p = apvts.getParameter (pid))
-            p->setValueNotifyingHost (juce::jlimit (0.f, 1.f, p->getNormalisableRange().convertTo0to1 ((float) idx)));
+            p->setValueNotifyingHost (
+                juce::jlimit (0.f, 1.f, p->getNormalisableRange().convertTo0to1 ((float) idx)));
     };
     auto rr = [this] (float lo, float hi) { return lo + rng.nextFloat() * (hi - lo); };
 
-    // -- master --------------------------------------------------------------
     setNorm   (id::chaos,          rr (0.05f, 0.95f));
     setChoice (id::gravityGrid,    rng.nextInt (5));
     setNorm   (id::gravityPull,    rr (0.f, 1.f));
-    setNorm   (id::swing,          rr (0.35f, 0.75f));       // normalised: -0.3 .. +0.5
+    setNorm   (id::swing,          rr (0.35f, 0.75f));
     setNorm   (id::dryWet,         rr (0.55f, 1.f));
     setNorm   (id::triggerRate,    rr (0.12f, 0.80f));
     setNorm   (id::reinject,       rng.nextFloat() < 0.4f ? rr (0.05f, 0.45f) : 0.f);
     setNorm   (id::analysisInform, rr (0.f, 1.f));
     setNorm   (id::morph,          rr (0.f, 1.f));
     setNorm   (id::scAmount,       rr (0.f, 1.f));
-    setNorm   (id::scarOn,          rng.nextFloat() < 0.35f ? 1.f : 0.f);
-    setNorm   (id::scarDrive,       rr (0.08f, 0.82f));
-    setNorm   (id::scarMix,         rr (0.15f, 0.72f));
+    setNorm   (id::scarOn,         rng.nextFloat() < 0.35f ? 1.f : 0.f);
+    setNorm   (id::scarDrive,      rr (0.08f, 0.82f));
+    setNorm   (id::scarMix,        rr (0.15f, 0.72f));
 
-    // -- surgeons ------------------------------------------------------------
     bool anyOn = false;
+    juce::Array<int> eligibleOn;
     for (int s = 0; s < kNumSurgeons; ++s)
     {
-        const bool on = rng.nextFloat() < 0.5f;
-        anyOn = anyOn || on;
-        setNorm   (sid (s, "on"),   on ? 1.f : 0.f);
+        const auto onID = sid (s, "on");
+        if (isParameterLocked (onID))
+        {
+            if (auto* p = apvts.getParameter (onID))
+                anyOn = anyOn || p->getValue() > 0.5f;
+        }
+        else
+        {
+            eligibleOn.add (s);
+            const bool on = rng.nextFloat() < 0.5f;
+            anyOn = anyOn || on;
+            setNorm (onID, on ? 1.f : 0.f);
+        }
+
         setNorm   (sid (s, "mix"),  rr (0.45f, 1.f));
         setNorm   (sid (s, "prob"), rr (0.20f, 0.90f));
         setNorm   (sid (s, "p1"),   rr (0.f, 1.f));
@@ -1050,10 +1175,9 @@ void VivisectProcessor::randomizeAll()
         setNorm   (sid (s, "p3"),   rr (0.f, 1.f));
         setChoice (sid (s, "route"), rng.nextFloat() < 0.18f ? 1 + rng.nextInt (kNumSurgeons) : 0);
     }
-    if (! anyOn)   // never hand back a silent plugin
-        setNorm (sid (rng.nextInt (kNumSurgeons), "on"), 1.f);
+    if (! anyOn && ! eligibleOn.isEmpty())
+        setNorm (sid (eligibleOn[rng.nextInt (eligibleOn.size())], "on"), 1.f);
 
-    // -- modulation ----------------------------------------------------------
     setNorm   (id::lfo1Rate, rr (0.f, 1.f));
     setNorm   (id::lfo2Rate, rr (0.f, 1.f));
     setChoice (id::lfo1Shape, rng.nextInt (5));
@@ -1068,8 +1192,94 @@ void VivisectProcessor::randomizeAll()
         const bool live = rng.nextFloat() < 0.5f;
         setChoice (pre + "src", live ? 1 + rng.nextInt (nSrc - 1) : 0);
         setChoice (pre + "dst", live ? 1 + rng.nextInt (nDst - 1) : 0);
-        setNorm   (pre + "depth", live ? rr (0.1f, 0.9f) : 0.5f);   // 0.5 normalised == zero depth
+        setNorm   (pre + "depth", live ? rr (0.1f, 0.9f) : 0.5f);
     }
+}
+
+void VivisectProcessor::mutateCurrent()
+{
+    auto* amountParam = apvts.getParameter (id::mutationAmount);
+    if (amountParam == nullptr) return;
+    const float amount = juce::jlimit (0.f, 1.f, amountParam->getValue());
+    if (amount <= 0.f) return;
+
+    auto mutateContinuous = [this, amount] (const juce::String& pid, float scale = 0.35f)
+    {
+        if (isParameterLocked (pid)) return;
+        if (auto* p = apvts.getParameter (pid))
+        {
+            const float delta = (rng.nextFloat() * 2.f - 1.f) * amount * scale;
+            p->setValueNotifyingHost (juce::jlimit (0.f, 1.f, p->getValue() + delta));
+        }
+    };
+
+    auto mutateChoice = [this, amount] (const juce::String& pid)
+    {
+        if (amount < 0.35f || isParameterLocked (pid)) return;
+        const float chance = juce::jlimit (0.f, 0.30f, (amount - 0.35f) * 0.45f);
+        if (rng.nextFloat() >= chance) return;
+
+        if (auto* p = apvts.getParameter (pid))
+        {
+            const auto range = p->getNormalisableRange();
+            const float actual = range.convertFrom0to1 (p->getValue());
+            const float step = range.interval > 0.f ? range.interval : 1.f;
+            const float moved = juce::jlimit (range.start, range.end,
+                                               actual + (rng.nextBool() ? step : -step));
+            p->setValueNotifyingHost (range.convertTo0to1 (moved));
+        }
+    };
+
+    for (auto pid : { id::chaos, id::gravityPull, id::swing, id::dryWet,
+                      id::triggerRate, id::reinject, id::analysisInform, id::morph,
+                      id::scAmount, id::scarDrive, id::scarMix, id::lfo1Rate,
+                      id::lfo2Rate, id::macro1, id::macro2 })
+        mutateContinuous (pid);
+
+    mutateChoice (id::gravityGrid);
+    mutateChoice (id::lfo1Shape);
+    mutateChoice (id::lfo2Shape);
+
+    bool anyOn = false;
+    juce::Array<int> eligibleOn;
+    for (int s = 0; s < kNumSurgeons; ++s)
+    {
+        const auto onID = sid (s, "on");
+        if (! isParameterLocked (onID))
+        {
+            eligibleOn.add (s);
+            if (amount >= 0.55f && rng.nextFloat() < (amount - 0.55f) * 0.22f)
+                if (auto* p = apvts.getParameter (onID))
+                    p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.f : 1.f);
+        }
+
+        if (auto* p = apvts.getParameter (onID))
+            anyOn = anyOn || p->getValue() > 0.5f;
+
+        mutateContinuous (sid (s, "mix"));
+        mutateContinuous (sid (s, "prob"));
+        mutateContinuous (sid (s, "p1"));
+        mutateContinuous (sid (s, "p2"));
+        mutateContinuous (sid (s, "p3"));
+        mutateChoice (sid (s, "route"));
+    }
+
+    if (! anyOn && ! eligibleOn.isEmpty())
+        if (auto* p = apvts.getParameter (sid (eligibleOn[rng.nextInt (eligibleOn.size())], "on")))
+            p->setValueNotifyingHost (1.f);
+
+    for (int m = 0; m < kNumModSlots; ++m)
+    {
+        const juce::String pre = "mm" + juce::String (m + 1) + "_";
+        mutateChoice (pre + "src");
+        mutateChoice (pre + "dst");
+        mutateContinuous (pre + "depth");
+    }
+
+    if (amount >= 0.70f && ! isParameterLocked (id::scarOn)
+        && rng.nextFloat() < (amount - 0.70f) * 0.30f)
+        if (auto* p = apvts.getParameter (id::scarOn))
+            p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.f : 1.f);
 }
 
 // ===========================================================================
@@ -1080,21 +1290,20 @@ void VivisectProcessor::selectABSlot (int slot)
     slot = juce::jlimit (0, 1, slot);
     if (slot == abSlot) return;
 
-    abState[abSlot] = apvts.copyState();          // park what is on screen
+    abState[abSlot] = soundStateSnapshot();        // park sonic state only
     if (abState[slot].isValid())
     {
-        apvts.replaceState (abState[slot].createCopy());
-        syncFromStateTree();
+        restoreSoundState (abState[slot]);
     }
     else
     {
-        abState[slot] = apvts.copyState();        // first visit: seed from current
+        abState[slot] = soundStateSnapshot();      // first visit: seed from current
     }
     abSlot = slot;
 }
 void VivisectProcessor::copyABSlot()
 {
-    abState[1 - abSlot] = apvts.copyState();
+    abState[1 - abSlot] = soundStateSnapshot();
 }
 
 // ===========================================================================
@@ -1104,7 +1313,7 @@ bool VivisectProcessor::savePresetToFile (const juce::File& f)
 {
     if (f == juce::File()) return false;
     f.getParentDirectory().createDirectory();
-    if (auto xml = apvts.copyState().createXml())
+    if (auto xml = soundStateSnapshot().createXml())
         if (xml->writeTo (f))
         {
             lastPresetFile = f;
@@ -1117,8 +1326,7 @@ bool VivisectProcessor::loadPresetFromFile (const juce::File& f)
     if (! f.existsAsFile()) return false;
     auto xml = juce::XmlDocument::parse (f);
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return false;
-    apvts.replaceState (juce::ValueTree::fromXml (*xml));
-    syncFromStateTree();
+    restoreSoundState (juce::ValueTree::fromXml (*xml));
     lastPresetFile = f;
     return true;
 }
