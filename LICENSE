@@ -1,0 +1,15 @@
+# VIVISECT Proprietary Source License
+
+Copyright © 2026 Sheldon Davidson. All rights reserved.
+
+This license applies only to original project source code, documentation, specifications, interface materials, graphics, presets, tests, and build materials authored for VIVISECT and included in this repository, except for material identified as third-party or separately licensed.
+
+No permission is granted to copy, modify, adapt, redistribute, sublicense, publish, sell, or create derivative works from those covered materials without a separate written license from the copyright holder.
+
+Compiled builds distributed by the copyright holder may be accompanied by separate end-user terms. This source license does not claim ownership of content users create with the software.
+
+**Third-party and media carve-out:** Third-party libraries, including JUCE and any separately identified wrappers, remain under their own licenses. Sample audio, screenshots, or other media are covered only to the extent they are original materials owned by the copyright holder and not separately identified as third-party or separately licensed material.
+
+THE MATERIALS ARE PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE COPYRIGHT HOLDER IS NOT LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM USE OF THE MATERIALS.
+
+For licensing inquiries, contact the copyright holder.
