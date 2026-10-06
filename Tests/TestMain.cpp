@@ -768,10 +768,21 @@ int main()
         b.prepare (kRate);
 
         // Same elapsed audio time, radically different host block sizes.
-        for (int i = 0; i < (int) kRate / 64; ++i)  a.process (64, 0.2f);
-        for (int i = 0; i < (int) kRate / 512; ++i) b.process (512, 0.2f);
+        const int total = (int) kRate;
+        for (int done = 0; done < total; )
+        {
+            const int n = jmin (64, total - done);
+            a.process (n, 0.2f);
+            done += n;
+        }
+        for (int done = 0; done < total; )
+        {
+            const int n = jmin (512, total - done);
+            b.process (n, 0.2f);
+            done += n;
+        }
 
-        check (std::abs (a.sourceValue (6) - b.sourceValue (6)) < 0.03f,
+        check (std::abs (a.sourceValue (6) - b.sourceValue (6)) < 1.0e-5f,
                "random-walk value is effectively block-size invariant after one second");
         check (std::abs (a.sourceValue (6)) <= 1.f && std::abs (b.sourceValue (6)) <= 1.f,
                "random-walk output remains bounded");
