@@ -949,6 +949,7 @@ TriggerContext SliceScheduler::makeManualContext (float p1, int sourceSelect, fl
 void ModMatrix::prepare (double sr)
 {
     sampleRate = sr;
+    walkTickSamples = juce::jmax (1, (int) std::llround (sampleRate / 50.0));
     reset();
 }
 void ModMatrix::reset()
@@ -960,7 +961,7 @@ void ModMatrix::reset()
     env = 0.f;
     walk = 0.f;
     walkVelocity = 0.f;
-    walkAccumulator = 0.0;
+    walkSamples = 0;
 }
 void ModMatrix::process (int n, float inputRms) noexcept
 {
@@ -991,11 +992,10 @@ void ModMatrix::process (int n, float inputRms) noexcept
     // Advance the random walk on a fixed 50 Hz internal clock, not once per
     // host block. That makes the modulation character consistent at 32, 64,
     // 512 or 2048 sample buffers.
-    walkAccumulator += (double) n / juce::jmax (1.0, sampleRate);
-    constexpr double walkTick = 1.0 / 50.0;
-    while (walkAccumulator >= walkTick)
+    walkSamples += juce::jmax (0, n);
+    while (walkSamples >= walkTickSamples)
     {
-        walkAccumulator -= walkTick;
+        walkSamples -= walkTickSamples;
         const float impulse = (rng.nextFloat() * 2.f - 1.f) * 0.075f;
         walkVelocity = juce::jlimit (-0.18f, 0.18f, walkVelocity * 0.82f + impulse);
         walk = juce::jlimit (-1.f, 1.f, walk + walkVelocity);
