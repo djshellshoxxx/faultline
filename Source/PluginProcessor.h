@@ -155,7 +155,7 @@ private:
     // Sound snapshots deliberately exclude VSX_SETTINGS. Presets, A/B and
     // history are sonic state; MIDI maps, tooltips and locks are global user
     // settings and must not change when auditioning sound states.
-    juce::ValueTree soundStateSnapshot() const;
+    juce::ValueTree soundStateSnapshot();
     void restoreSoundState (const juce::ValueTree&);                // rebuild cc map + cached settings
     void seedDefaultMidiMap();
     int  paramIndexFor (const juce::String& paramID) const;
