@@ -966,8 +966,12 @@ int main()
 
         auto* chaos = p.apvts.getParameter (vsx::id::chaos);
         auto* scarMix = p.apvts.getParameter (vsx::id::scarMix);
-        check (chaos != nullptr && scarMix != nullptr, "lock test parameters exist");
+        auto* amount = p.apvts.getParameter (vsx::id::mutationAmount);
+        check (chaos != nullptr && scarMix != nullptr && amount != nullptr,
+               "lock test parameters exist");
 
+        if (amount != nullptr) amount->setValueNotifyingHost (0.73f);
+        const float mutationAmountBefore = amount != nullptr ? amount->getValue() : 0.f;
         chaos->setValueNotifyingHost (0.314159f);
         scarMix->setValueNotifyingHost (0.271828f);
         p.setParameterLocked (vsx::id::chaos, true);
@@ -986,6 +990,8 @@ int main()
                "RANDOM preserves locked Chaos across repeated presses");
         check (std::abs (scarMix->getValue() - scarLocked) < 1.0e-6f,
                "RANDOM preserves locked SCAR Mix across repeated presses");
+        check (amount != nullptr && std::abs (amount->getValue() - mutationAmountBefore) < 1.0e-6f,
+               "RANDOM preserves Mutation Amount across repeated presses");
 
         MemoryBlock blob;
         p.getStateInformation (blob);
