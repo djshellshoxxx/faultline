@@ -989,6 +989,30 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    beginCase ("RANDOM preserves all surgeon locks and reports the dry state");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        for (int s = 0; s < vsx::kNumSurgeons; ++s)
+        {
+            const auto onID = vsx::sid (s, "on");
+            p.apvts.getParameter (onID)->setValueNotifyingHost (0.f);
+            p.setParameterLocked (onID, true);
+        }
+
+        p.randomizeAll();
+        bool allOff = true;
+        for (int s = 0; s < vsx::kNumSurgeons; ++s)
+            allOff = allOff && p.apvts.getParameter (vsx::sid (s, "on"))->getValue() < 0.5f;
+        check (allOff, "RANDOM does not break locks when every surgeon is locked off");
+
+        bool explained = false;
+        for (const auto& note : p.detectMisconfiguration())
+            explained = explained || note.containsIgnoreCase ("locked");
+        check (explained, "diagnostics explains why RANDOM leaves the signal dry");
+    }
+
+    // -----------------------------------------------------------------------
     beginCase ("Controlled MUTATE creates bounded nearby variations");
     {
         VivisectProcessor p;
@@ -998,8 +1022,8 @@ int main()
         auto* amount = p.apvts.getParameter (vsx::id::mutationAmount);
         check (amount != nullptr, "Mutation Amount parameter exists");
 
-        const auto beforeZero = snapshotParams (p);
         if (amount != nullptr) amount->setValueNotifyingHost (0.f);
+        const auto beforeZero = snapshotParams (p);
         p.mutateCurrent();
         check (snapshotParams (p) == beforeZero, "MUTATE Amount 0 changes no parameters");
 

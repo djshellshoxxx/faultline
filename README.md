@@ -136,6 +136,23 @@ Each surgeon has **On**, **Mix**, **Prob** (activity probability) and **Route In
 * **SCAR** — optional post-rack texture stage. Drive adds bounded soft saturation
   plus a torn transient edge; Mix blends it against the untreated master signal.
 
+## RANDOM, MUTATE and locks
+
+**RANDOM** creates a new sound. The first press starts from the current settings;
+later presses reset unlocked sound controls to their defaults before randomizing.
+Input/output trim, buffer size, source selection, MIDI mode and the hidden
+FLATLINE controls are left alone. If every surgeon switch is locked off, RANDOM
+keeps them off and Diagnostics explains why the effect is silent.
+
+**MUTATE** makes a nearby variation instead of replacing the sound. Set
+**MUTATE AMT** low for subtle changes or high for larger changes. It preserves
+infrastructure settings, loaded samples and user settings.
+
+Right-click a control and choose **Lock for Randomize / Mutate** to protect its
+current value. The same menu can clear every lock. RESET still restores all
+parameter defaults. A/B snapshots, presets and history rewind switch sound
+settings while preserving the current tooltips, MIDI mappings and locks.
+
 ## Mod matrix
 
 4 slots. Sources: LFO 1, LFO 2 (rate + shape), Env Follow, Macro 1, Macro 2,
@@ -158,8 +175,8 @@ read from Sample B.
 
 ## History rewind
 
-The bottom bar records the whole plugin state at 2 Hz for 60 s. Drag it to
-rewind everything. **Freeze / Save** writes the current state as a user preset.
+The bottom bar records sound settings at 2 Hz for 60 s. Drag it to rewind the
+sound while global user settings remain unchanged. **Freeze / Save** writes the current state as a user preset.
 
 ## Factory vibes
 

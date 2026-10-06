@@ -147,6 +147,11 @@ void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::C
     m.addItem (3, cc >= 0 ? "MIDI learn  (re-map, now CC " + juce::String (cc) + ")"
                           : "MIDI learn  (move a controller)");
     m.addItem (4, cc >= 0 ? "Clear MIDI mapping (CC " + juce::String (cc) + ")" : "Clear MIDI mapping", cc >= 0);
+    m.addSeparator();
+    const bool locked = host.isParameterLocked (paramID);
+    m.addItem (5, locked ? "Unlock from Randomize / Mutate" : "Lock for Randomize / Mutate",
+               true, locked);
+    m.addItem (6, "Clear all Randomize / Mutate locks", host.lockedParameterCount() > 0);
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target),
                      [&host, paramID] (int choice)
@@ -159,6 +164,8 @@ void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::C
                              case 2: showValueEntry (host, paramID); break;
                              case 3: host.beginMidiLearnFor (paramID); break;
                              case 4: host.clearCCForParam (paramID); break;
+                             case 5: host.setParameterLocked (paramID, ! host.isParameterLocked (paramID)); break;
+                             case 6: host.clearParameterLocks(); break;
                              default: break;
                          }
                      });

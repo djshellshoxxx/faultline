@@ -18,7 +18,7 @@ namespace
     constexpr int kMasterH    = 104;
     constexpr int kIoH        = 88;
     constexpr int kStripH     = 78;
-    constexpr int kBtnRowH    = metric::buttonH;   // 28
+    constexpr int kBtnRowH    = 40;
     constexpr int kModHeadH   = 76;
     constexpr int kModRowH    = 26;
     constexpr int kHistoryH   = 24;
@@ -195,7 +195,7 @@ VivisectEditor::VivisectEditor (VivisectProcessor& p)
     {
         addAndMakeVisible (b);
         b->setClickingTogglesState (false);
-        b->setTooltip ("A / B compare. Two full snapshots of every control.");
+        b->setTooltip ("A / B compare. Switch between two snapshots of the sound controls.");
     }
     addAndMakeVisible (copyBtn);
     copyBtn.setTooltip ("Copy the current snapshot across to the other slot.");
@@ -213,6 +213,14 @@ VivisectEditor::VivisectEditor (VivisectProcessor& p)
     randomBtn.setTooltip ("A completely new set of settings. The first press randomises from here; "
                           "every press after that wipes back to defaults first.");
     randomBtn.onClick = [this] { proc.randomizeAll(); };
+
+    addAndMakeVisible (mutateBtn);
+    mutateBtn.setColour (juce::TextButton::buttonOnColourId, col::accent);
+    mutateBtn.setTooltip ("Create a nearby variation using MUTATE AMT. Locked controls stay unchanged.");
+    mutateBtn.onClick = [this] { proc.mutateCurrent(); };
+    kMutationAmt = &addKnob (id::mutationAmount, "MUTATE AMT",
+                             "How far MUTATE moves creative controls. Low values make subtle variations; high values make larger changes.",
+                             VsxSlider::Size::small);
 
     addAndMakeVisible (resetBtn);
     resetBtn.setTooltip ("Put every control back to its default.");
@@ -749,6 +757,9 @@ void VivisectEditor::resized()
     auto btnRow = r.removeFromTop (kBtnRowH).reduced (kPad, 0);
     auto pb = [&] (juce::Component* c, int w) { c->setBounds (btnRow.removeFromLeft (w)); btnRow.removeFromLeft (kG); };
     pb (&randomBtn, 96);
+    pb (&mutateBtn, 88);
+    kMutationAmt->setBounds (btnRow.removeFromLeft (72).withSizeKeepingCentre (72, kBtnRowH));
+    btnRow.removeFromLeft (kG / 2);
     pb (&resetBtn, 88);
     pb (bMidi, 112);
     pb (bPanic, 128);

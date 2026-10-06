@@ -31,6 +31,10 @@ public:
     void beginMidiLearnFor (const juce::String& paramID) override;
     int  ccForParam (const juce::String& paramID) const override { return proc.getCCForParam (paramID); }
     void clearCCForParam (const juce::String& paramID) override  { proc.clearCCForParam (paramID); }
+    bool isParameterLocked (const juce::String& paramID) const override { return proc.isParameterLocked (paramID); }
+    void setParameterLocked (const juce::String& paramID, bool locked) override { proc.setParameterLocked (paramID, locked); }
+    void clearParameterLocks() override { proc.clearParameterLocks(); }
+    int  lockedParameterCount() const override { return proc.lockedParameterCount(); }
 
 private:
     using SA = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -86,7 +90,7 @@ private:
     vsx::GearButton gearBtn;
 
     // action buttons
-    vsx::VsxButton randomBtn { "RANDOM" }, resetBtn { "RESET" }, saveBtn { "FREEZE / SAVE" };
+    vsx::VsxButton randomBtn { "RANDOM" }, mutateBtn { "MUTATE" }, resetBtn { "RESET" }, saveBtn { "FREEZE / SAVE" };
 
     // overlays
     vsx::HelpPanel    help;
@@ -99,7 +103,7 @@ private:
                    *kTrig = nullptr, *kReinj = nullptr, *kAnalys = nullptr, *kMorph = nullptr,
                    *kDecayT = nullptr, *kScAmt = nullptr,
                    *kL1r = nullptr, *kL2r = nullptr, *kMac1 = nullptr, *kMac2 = nullptr,
-                   *kInTrim = nullptr, *kOutTrim = nullptr;
+                   *kInTrim = nullptr, *kOutTrim = nullptr, *kMutationAmt = nullptr;
     vsx::VsxComboBox *cGrid = nullptr, *cSource = nullptr, *cScMode = nullptr,
                      *cL1s = nullptr, *cL2s = nullptr, *cBuffer = nullptr;
     vsx::VsxButton *bMidi = nullptr, *bPanic = nullptr, *bDecay = nullptr, *bScar = nullptr;

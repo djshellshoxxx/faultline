@@ -713,7 +713,20 @@ juce::StringArray VivisectProcessor::detectMisconfiguration() const
             ++surgeonsOn;
 
     if (surgeonsOn == 0)
-        notes.add ("No surgeons are switched on - the plugin will pass audio through untouched.");
+    {
+        bool everySurgeonLockedOff = true;
+        for (int s = 0; s < vsx::kNumSurgeons; ++s)
+        {
+            const auto onID = vsx::sid (s, "on");
+            const auto* parameter = apvts.getParameter (onID);
+            if (parameter != nullptr && (parameter->getValue() > 0.5f || ! isParameterLocked (onID)))
+                everySurgeonLockedOff = false;
+        }
+
+        notes.add (everySurgeonLockedOff
+            ? "All surgeons are off and locked. RANDOM will preserve those locks, so no surgeon can be enabled until a lock is removed."
+            : "No surgeons are switched on - the plugin will pass audio through untouched.");
+    }
 
     if (pvc (vsx::id::dryWet) < 0.01f)
         notes.add ("DRY / WET is fully dry, so none of the processing is audible.");
@@ -972,6 +985,14 @@ void VivisectProcessor::syncFromStateTree()
     for (auto& c : ccToParam) c.store (-1);
 
     const auto t = apvts.state.getChildWithName (kSettingsTag);
+    parameterLocks.clear();
+    juce::StringArray locks;
+    if (t.isValid())
+        locks.addTokens (t.getProperty (kLocksProp).toString(), ";", "");
+    for (const auto& pid : locks)
+        if (apvts.getParameter (pid) != nullptr && ! parameterLocks.contains (pid))
+            parameterLocks.add (pid);
+
     if (! t.isValid() || ! t.hasProperty (kMidiMapProp))
     {
         seedDefaultMidiMap();
@@ -988,12 +1009,6 @@ void VivisectProcessor::syncFromStateTree()
         if (idx >= 0 && cc >= 0 && cc < 128) ccToParam[(size_t) cc].store (idx);
     }
 
-    parameterLocks.clear();
-    juce::StringArray locks;
-    locks.addTokens (t.getProperty (kLocksProp).toString(), ";", "");
-    for (const auto& pid : locks)
-        if (apvts.getParameter (pid) != nullptr && ! parameterLocks.contains (pid))
-            parameterLocks.add (pid);
 }
 
 void VivisectProcessor::beginMidiLearn (const juce::String& paramID)
