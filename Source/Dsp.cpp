@@ -749,7 +749,6 @@ public:
         freq.assign ((size_t) (2 * N), 0.f);
         tmp.assign ((size_t) N, 0.f);
         ola.assign (RING, 0.f);
-        olaNorm.assign (RING, 0.f);
         winTab.assign (N, 0.f);
         for (int i = 0; i < N; ++i) winTab[(size_t) i] = 0.5f - 0.5f * std::cos (6.2831853f * i / (N - 1));
         reset();
@@ -757,7 +756,6 @@ public:
     void reset() override
     {
         std::fill (ola.begin(), ola.end(), 0.f);
-        std::fill (olaNorm.begin(), olaNorm.end(), 0.f);
         active = false; act = 0.f; gain = 0.f;
     }
     void trigger (const TriggerContext& c) override
@@ -779,7 +777,6 @@ public:
         durLeft = (int) ((0.2 + pp2 * 3.8) * sr);
         blur = pp3;
         std::fill (ola.begin(), ola.end(), 0.f);
-        std::fill (olaNorm.begin(), olaNorm.end(), 0.f);
         rp = 0; hopCd = H; gain = 1.f; active = true; startOff = c.startOffset;
         synthFrame (0);
         lastGrabStart.store ((i64) off);
@@ -794,10 +791,8 @@ public:
         {
             if (hopCd <= 0) { synthFrame (rp); hopCd = H; }
             const auto idx = (size_t) (rp % RING);
-            const float norm = olaNorm[idx];
-            const float s = norm > 1.0e-5f ? (ola[idx] / norm) * gain : 0.f;
+            const float s = ola[idx] * gain;
             ola[idx] = 0.f;
-            olaNorm[idx] = 0.f;
             L[i] += s; R[i] += s;
             ++rp; --hopCd;
             if (--durLeft <= 0)
@@ -820,21 +815,21 @@ private:
             freq[(size_t) (2 * k + 1)] = mag[(size_t) k] * std::sin (runPhase[(size_t) k]);
         }
         fft.performRealOnlyInverseTransform (freq.data());
-        // JUCE's real inverse FFT is already normalised. The analysis frame
-        // has one Hann window applied; applying the synthesis Hann here gives
-        // x*w^2. Accumulating the same w^2 weights and dividing at emission
-        // reconstructs a stable level without a fixed overlap-gain guess.
+        // JUCE's inverse FFT is already normalised. With H=N/4, squared Hann
+        // synthesis windows have a steady overlap gain of 1.5, so 2/3 is the
+        // COLA compensation. A constant gain is important here: BLUR changes
+        // spectral phase, so dividing by tiny per-sample window weights near
+        // frame edges can create large spikes.
+        constexpr float overlapGain = 2.0f / 3.0f;
         for (int i = 0; i < N; ++i)
         {
             const auto idx = (size_t) ((at + i) % RING);
-            const float w = winTab[(size_t) i];
-            ola[idx] += freq[(size_t) i] * w;
-            olaNorm[idx] += w * w;
+            ola[idx] += freq[(size_t) i] * winTab[(size_t) i] * overlapGain;
         }
     }
     juce::dsp::FFT fft { 11 };
     juce::dsp::WindowingFunction<float> window { (size_t) N, juce::dsp::WindowingFunction<float>::hann };
-    std::vector<float> mag, runPhase, freq, tmp, ola, olaNorm, winTab;
+    std::vector<float> mag, runPhase, freq, tmp, ola, winTab;
     int rp = 0, hopCd = 0, durLeft = 0, startOff = 0;
     float blur = 0.f, gain = 0.f;
     bool active = false;
