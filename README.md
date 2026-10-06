@@ -196,8 +196,8 @@ Build order from the brief, and where this tree currently sits:
 10. UI polish + marketing — **first pass**
 
 Current audit notes: the UI monitor reads DSP state without a lock (display only,
-benign). FREEZE now uses per-sample overlap-add normalization rather than a fixed
-gain approximation. Random Walk advances on a fixed internal clock so its
+benign). FREEZE now uses the correct constant gain compensation for its 75%-overlapped
+Hann synthesis windows, avoiding both the old attenuation and edge spikes. Random Walk advances on a fixed internal clock so its
 behaviour is independent of host buffer size. Reorder's Euclidean mode uses a
 maximally-even Bjorklund-style pattern instead of front-loading pulse slices.
 The specimen exporter supports 16/24/32-bit PCM WAV and reports filename, folder,
