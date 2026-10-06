@@ -618,7 +618,8 @@ private:
     float  macro[2]    { 0.f, 0.f };
     float  walk = 0.f;
     float  walkVelocity = 0.f;
-    double walkAccumulator = 0.0;
+    int    walkSamples = 0;
+    int    walkTickSamples = 882;
     juce::Random rng { 0x1a2b3c };
     Slot   slot[kNumModSlots];
 };
