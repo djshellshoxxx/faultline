@@ -530,9 +530,10 @@ public:
 
             for (int s = 0; s < kNumSurgeons; ++s)
             {
-                if (! on[s]) continue;
-                if (activity[s] > 0.5f && rng.nextFloat() > chaos) continue; // busy
-                float pr = 0.55f * triggerRate * prob[s] * base[s];
+                const auto si = (size_t) s;
+                if (! on[si]) continue;
+                if (activity[si] > 0.5f && rng.nextFloat() > chaos) continue; // busy
+                float pr = 0.55f * triggerRate * prob[si] * base[si];
                 pr *= (1.f - cf.skipProb);
                 if (rng.nextFloat() >= pr) continue;
 
@@ -562,7 +563,7 @@ public:
                 if (rng.nextFloat() < cf.wrongSlice)
                     srcPos = (double) ctx.nowPos - rng.nextFloat() * spec.capacitySamples() * 0.9;
 
-                double len = step * (0.5 + p1[s] * 3.5);
+                double len = step * (0.5 + p1[si] * 3.5);
                 len *= 1.0 + (rng.nextFloat() * 2.f - 1.f) * cf.lengthJitter * 0.8;
                 len  = juce::jlimit (0.002 * sampleRate, 2.0 * sampleRate, len);
 
