@@ -780,7 +780,7 @@ public:
         blur = pp3;
         std::fill (ola.begin(), ola.end(), 0.f);
         std::fill (olaNorm.begin(), olaNorm.end(), 0.f);
-        rp = 0; hopCd = 0; gain = 1.f; active = true; startOff = c.startOffset;
+        rp = 0; hopCd = H; gain = 1.f; active = true; startOff = c.startOffset;
         synthFrame (0);
         lastGrabStart.store ((i64) off);
         lastGrabLen.store (N);
