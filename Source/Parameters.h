@@ -31,6 +31,7 @@ namespace id
     constexpr auto inputTrim      = "inputTrim";
     constexpr auto outputTrim     = "outputTrim";
     constexpr auto midiMode       = "midiMode";
+    constexpr auto mutationAmount = "mutationAmount";
 
     // ---- SCAR: post-rack master texture effect ----------------------------
     constexpr auto scarOn          = "scarOn";
@@ -120,6 +121,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     p.add (std::make_unique<F> (pid (id::inputTrim), "Input Trim", R { -24.f, 24.f, 0.01f }, 0.f));
     p.add (std::make_unique<F> (pid (id::outputTrim), "Output Trim", R { -24.f, 24.f, 0.01f }, 0.f));
     p.add (std::make_unique<B> (pid (id::midiMode), "MIDI Mode", false));
+    p.add (std::make_unique<F> (pid (id::mutationAmount), "Mutation Amount",
+                                R { 0.f, 1.f, 0.0001f }, 0.20f));
 
     p.add (std::make_unique<B> (pid (id::scarOn), "Scar", false));
     p.add (std::make_unique<F> (pid (id::scarDrive), "Scar Drive", R { 0.f, 1.f, 0.0001f }, 0.35f));
