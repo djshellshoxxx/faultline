@@ -933,7 +933,7 @@ TriggerContext SliceScheduler::makeManualContext (float p1, int sourceSelect, fl
     c.sourceSelect = sourceSelect;
     c.morph = morph;
     c.nowPos = spec.writePos();
-    const i64 minAbs = juce::jmax<i64> (0, c.nowPos - spec.capacitySamples() + 8);
+    const i64 minAbs = std::max<i64> (0, c.nowPos - spec.capacitySamples() + 8);
     const double minLen = 0.01 * sampleRate;
     const double available = juce::jmax (minLen, (double) c.nowPos - (double) minAbs - 4.0);
     const double len = juce::jlimit (minLen, juce::jmin (2.0 * sampleRate, available),
