@@ -164,6 +164,18 @@ int main()
         p.prepareToPlay (kRate, kBlock);
         check (p.getParameters().size() > 0, "processor exposes parameters");
 
+        static constexpr const char* surgeonSuffixes[] { "on", "mix", "prob", "p1", "p2", "p3", "route" };
+        bool audioThreadIdsResolve = true;
+        for (int s = 0; s < vsx::kNumSurgeons; ++s)
+            for (int param = 0; param < 7; ++param)
+                audioThreadIdsResolve = audioThreadIdsResolve
+                    && p.apvts.getRawParameterValue (vsx::sidRaw (s, (vsx::SurgeonParameter) param)) != nullptr
+                    && p.apvts.getRawParameterValue (vsx::sid (s, surgeonSuffixes[param])) != nullptr;
+        for (const auto* id : { "mm1_src", "mm1_dst", "mm1_depth", "mm2_src", "mm2_dst", "mm2_depth",
+                                "mm3_src", "mm3_dst", "mm3_depth", "mm4_src", "mm4_dst", "mm4_depth" })
+            audioThreadIdsResolve = audioThreadIdsResolve && p.apvts.getRawParameterValue (id) != nullptr;
+        check (audioThreadIdsResolve, "all cached audio-thread parameter ids match the APVTS layout");
+
         const auto defaults = snapshotParams (p);
         p.randomizeAll();
         p.resetAllToDefaults();
