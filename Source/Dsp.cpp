@@ -338,6 +338,46 @@ float readSource (const TriggerContext& c, int ch, double absPos) noexcept
 // ===========================================================================
 //  Surgeons
 // ===========================================================================
+int buildEuclideanPattern (int steps, int pulses, std::array<int, 64>& pattern) noexcept
+{
+    pattern.fill (0);
+    steps  = juce::jlimit (1, (int) pattern.size(), steps);
+    pulses = juce::jlimit (0, steps, pulses);
+    if (pulses == 0)
+        return steps;
+    if (pulses == steps)
+    {
+        for (int i = 0; i < steps; ++i) pattern[(size_t) i] = 1;
+        return steps;
+    }
+
+    // Bresenham/Bjorklund-equivalent distribution. Starting with a pulse gives
+    // a stable canonical rotation, while every circular gap differs by at most
+    // one step.
+    int bucket = 0;
+    for (int i = 0; i < steps; ++i)
+    {
+        bucket += pulses;
+        if (bucket >= steps)
+        {
+            bucket -= steps;
+            pattern[(size_t) i] = 1;
+        }
+    }
+
+    // Rotate so the canonical pattern begins on a pulse.
+    int first = 0;
+    while (first < steps && pattern[(size_t) first] == 0) ++first;
+    if (first > 0 && first < steps)
+    {
+        std::array<int, 64> copy = pattern;
+        for (int i = 0; i < steps; ++i)
+            pattern[(size_t) i] = copy[(size_t) ((i + first) % steps)];
+    }
+    return steps;
+}
+
+// ---------------------------------------------------------------------------
 namespace
 {
 inline float lerpBuf (const juce::AudioBuffer<float>& b, int ch, double p, int len)
@@ -674,11 +714,17 @@ private:
         else
         {
             std::array<int, 64> pat {};
-            const int k = nn / 2 + 1;
-            int bucket = 0;
-            for (int i = 0; i < nn; ++i) { bucket += k; if (bucket >= nn) { bucket -= nn; pat[(size_t) i] = 1; } }
-            for (int i = 0; i < nn; ++i) if (pat[(size_t) i]) push (i);
-            for (int i = 0; i < nn; ++i) if (! pat[(size_t) i]) push (i);
+            const int pulses = nn / 2 + 1;
+            buildEuclideanPattern (nn, pulses, pat);
+
+            // Use the Euclidean rhythm to interleave the two halves of the
+            // source region. This keeps every slice exactly once while making
+            // the audible permutation follow the maximally-even pattern,
+            // instead of front-loading all "hit" slices and then all rests.
+            int pulseSlice = 0;
+            int restSlice = pulses;
+            for (int i = 0; i < nn; ++i)
+                push (pat[(size_t) i] != 0 ? pulseSlice++ : restSlice++);
         }
         if (orderLen == 0) push (0);
     }
@@ -894,6 +940,8 @@ void ModMatrix::reset()
     shPhase[0] = shPhase[1] = 1.f;
     env = 0.f;
     walk = 0.f;
+    walkVelocity = 0.f;
+    walkAccumulator = 0.0;
 }
 void ModMatrix::process (int n, float inputRms) noexcept
 {
@@ -920,7 +968,24 @@ void ModMatrix::process (int n, float inputRms) noexcept
     }
     const float target = juce::jlimit (0.f, 1.f, inputRms * 4.f);
     env += (target - env) * juce::jlimit (0.f, 1.f, 8.f * n / (float) sampleRate);
-    walk = juce::jlimit (-1.f, 1.f, walk * 0.999f + (rng.nextFloat() * 2.f - 1.f) * 0.02f);
+
+    // Advance the random walk on a fixed 50 Hz internal clock, not once per
+    // host block. That makes the modulation character consistent at 32, 64,
+    // 512 or 2048 sample buffers.
+    walkAccumulator += (double) n / juce::jmax (1.0, sampleRate);
+    constexpr double walkTick = 1.0 / 50.0;
+    while (walkAccumulator >= walkTick)
+    {
+        walkAccumulator -= walkTick;
+        const float impulse = (rng.nextFloat() * 2.f - 1.f) * 0.075f;
+        walkVelocity = juce::jlimit (-0.18f, 0.18f, walkVelocity * 0.82f + impulse);
+        walk = juce::jlimit (-1.f, 1.f, walk + walkVelocity);
+
+        // Reflect velocity at the walls rather than pinning there; this avoids
+        // long flat shelves at +/-1 while keeping the source strictly bounded.
+        if ((walk >= 1.f && walkVelocity > 0.f) || (walk <= -1.f && walkVelocity < 0.f))
+            walkVelocity *= -0.65f;
+    }
 }
 float ModMatrix::sourceValue (int src) const noexcept
 {
