@@ -145,7 +145,7 @@ Rate, Freeze Blur.
 
 ## Live / MIDI
 
-* Notes **C2–F2** (36–41… actually 48–53, i.e. C3–F3) trigger surgeons 1–6.
+* Notes **C3–F3** (MIDI note numbers 48–53) trigger surgeons 1–6.
 * **CC20** Macro 1 · **CC21** Macro 2 · **CC22** Chaos · **CC23** Trigger Rate.
 * **MIDI Mode** suppresses the auto-scheduler so the plugin is a pure
   performance instrument.
