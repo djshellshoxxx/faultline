@@ -544,7 +544,7 @@ public:
                 ctx.sourceSelect = sourceSelect; ctx.morph = morph;
                 ctx.nowPos = spec.writePos();
 
-                const i64 minAbs = ctx.nowPos - spec.capacitySamples() + 8;
+                const i64 minAbs = juce::jmax<i64> (0, ctx.nowPos - spec.capacitySamples() + 8);
                 double srcPos = (double) ctx.nowPos - (1.0 + rng.nextFloat() * 3.0) * mc.samplesPerBeat;
                 if (rng.nextFloat() >= cf.gridBypass)
                     srcPos = snapToGrid (srcPos, mc.gridIndex, mc.samplesPerBeat, mc.pull, mc.swing);
@@ -565,9 +565,13 @@ public:
 
                 double len = step * (0.5 + p1[si] * 3.5);
                 len *= 1.0 + (rng.nextFloat() * 2.f - 1.f) * cf.lengthJitter * 0.8;
-                len  = juce::jlimit (0.002 * sampleRate, 2.0 * sampleRate, len);
+                const double minLen = 0.002 * sampleRate;
+                const double available = juce::jmax (minLen, (double) ctx.nowPos - (double) minAbs - 4.0);
+                len = juce::jlimit (minLen, juce::jmin (2.0 * sampleRate, available), len);
 
-                srcPos = juce::jlimit ((double) minAbs, (double) ctx.nowPos - len - 4.0, srcPos);
+                srcPos = juce::jlimit ((double) minAbs,
+                                      juce::jmax ((double) minAbs, (double) ctx.nowPos - len - 4.0),
+                                      srcPos);
 
                 ctx.sourcePos = srcPos;
                 ctx.lengthSamples = len;
