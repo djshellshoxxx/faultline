@@ -72,11 +72,11 @@ VsxButton& VivisectEditor::addParamButton (const char* pid, const juce::String& 
 // ===========================================================================
 VivisectEditor::VivisectEditor (VivisectProcessor& p)
     : juce::AudioProcessorEditor (p), proc (p),
-      monitor ([&p] (MonitorSnapshot& s) { p.buildMonitorSnapshot (s); }),
-      pulse ([&p] { return p.buildPulse(); }, [&p] { return p.apvts.getRawParameterValue (id::chaos)->load(); }),
       led ([&p] (int ch) { return p.outputPeak (ch); }),
       stream ([&p] (vsx::TelemetryEvent* dest, int max) { return p.telemetry().drain (dest, max); },
               [&p] (int idx) { return p.describeParam (idx); }),
+      monitor ([&p] (MonitorSnapshot& s) { p.buildMonitorSnapshot (s); }),
+      pulse ([&p] { return p.buildPulse(); }, [&p] { return p.apvts.getRawParameterValue (id::chaos)->load(); }),
       meter ([&p] (int ch) { return p.outputPeak (ch); }),
       history ([&p] { return p.historyCount(); }, [&p] (float x) { p.rewindToNormalized (x); })
 {
@@ -252,10 +252,10 @@ VivisectEditor::VivisectEditor (VivisectProcessor& p)
           << "A/B slot     " << (proc.currentABSlot() == 0 ? "A" : "B") << "\n"
           << "history      " << proc.historyCount() << " frames\n"
           << "\n";
-        for (auto* p : proc.getParameters())
-            if (auto* wid = dynamic_cast<juce::AudioProcessorParameterWithID*> (p))
-                s << wid->paramID.paddedRight (' ', 18) << " " << p->getCurrentValueAsText()
-                  << "   [" << juce::String (p->getValue(), 4) << "]\n";
+        for (auto* parameter : proc.getParameters())
+            if (auto* wid = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
+                s << wid->paramID.paddedRight (' ', 18) << " " << parameter->getCurrentValueAsText()
+                  << "   [" << juce::String (parameter->getValue(), 4) << "]\n";
         return s;
     };
 
