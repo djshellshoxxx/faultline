@@ -1095,11 +1095,18 @@ void VivisectProcessor::resetAllToDefaults()
 
 void VivisectProcessor::randomizeAll()
 {
-    // Utility state is not part of the generated sound. Preserve the Mutation
-    // Amount plus explicit locks when subsequent RANDOM presses reset first.
+    // Utility and routing state are not part of the generated sound. Preserve
+    // them when subsequent RANDOM presses reset the creative parameters first.
     std::map<juce::String, float> preserved;
     if (randomisedOnce)
     {
+        for (const auto& pid : { id::inputTrim, id::outputTrim, id::bufferBars,
+                                 id::sourceSel, id::midiMode, id::panicFreeze,
+                                 id::decayArm, id::decayTime, id::flatOn,
+                                 id::flatTone, id::flatBleed, id::flatMix })
+            if (auto* p = apvts.getParameter (pid))
+                preserved[pid] = p->getValue();
+
         for (const auto& pid : parameterLocks)
             if (auto* p = apvts.getParameter (pid))
                 preserved[pid] = p->getValue();

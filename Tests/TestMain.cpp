@@ -1005,6 +1005,46 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    beginCase ("RANDOM preserves infrastructure and hidden FLATLINE controls on repeated presses");
+    {
+        VivisectProcessor p;
+        const std::vector<String> excluded {
+            vsx::id::inputTrim, vsx::id::outputTrim, vsx::id::bufferBars,
+            vsx::id::sourceSel, vsx::id::midiMode, vsx::id::panicFreeze,
+            vsx::id::decayArm, vsx::id::decayTime, vsx::id::flatOn,
+            vsx::id::flatTone, vsx::id::flatBleed, vsx::id::flatMix
+        };
+
+        // First RANDOM establishes the repeated-press path. Give every
+        // excluded control a distinctive non-default normalized value.
+        p.randomizeAll();
+        std::map<String, float> expected;
+        for (size_t i = 0; i < excluded.size(); ++i)
+        {
+            auto* parameter = p.apvts.getParameter (excluded[i]);
+            check (parameter != nullptr, "excluded RANDOM control exists: " + excluded[i]);
+            if (parameter != nullptr)
+            {
+                const float value = 0.13f + 0.057f * (float) i;
+                parameter->setValueNotifyingHost (value);
+                expected[excluded[i]] = parameter->getValue();
+            }
+        }
+
+        for (int press = 0; press < 4; ++press)
+        {
+            p.randomizeAll();
+            for (const auto& kv : expected)
+            {
+                auto* parameter = p.apvts.getParameter (kv.first);
+                check (parameter != nullptr
+                       && std::abs (parameter->getValue() - kv.second) < 1.0e-6f,
+                       "RANDOM preserves excluded control across repeat: " + kv.first);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     beginCase ("RANDOM preserves all surgeon locks and reports the dry state");
     {
         VivisectProcessor p;
