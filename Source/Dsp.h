@@ -38,6 +38,53 @@ struct MonitorSnapshot
 };
 
 // ---------------------------------------------------------------------------
+//  SCAR — post-rack master texture. A bounded soft clipper with a small
+//  high-frequency "edge" contribution from the sample-to-sample delta.
+//  It is deliberately simple, stable and cheap enough to leave automated.
+// ---------------------------------------------------------------------------
+class Scar
+{
+public:
+    void reset() noexcept { previous.fill (0.f); }
+
+    void process (juce::AudioBuffer<float>& buf, int n, float drive, float mix) noexcept
+    {
+        mix = juce::jlimit (0.f, 1.f, mix);
+        drive = juce::jlimit (0.f, 1.f, drive);
+        if (mix <= 1.0e-4f || n <= 0)
+            return;
+
+        const float gain = 1.f + drive * 15.f;
+        const float edgeAmount = drive * 0.45f;
+        const int channels = juce::jmin (2, buf.getNumChannels());
+
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            float* io = buf.getWritePointer (ch);
+            float prev = previous[(size_t) ch];
+
+            for (int i = 0; i < n; ++i)
+            {
+                const float dry = io[i];
+                const float edge = dry - prev;
+                prev = dry;
+
+                // tanh keeps the processed branch strictly bounded. The edge
+                // term gives transients a torn, papery attack instead of a
+                // generic static distortion curve.
+                const float shaped = std::tanh (dry * gain + edge * edgeAmount * gain);
+                io[i] = dry * (1.f - mix) + shaped * mix;
+            }
+
+            previous[(size_t) ch] = prev;
+        }
+    }
+
+private:
+    std::array<float, 2> previous { 0.f, 0.f };
+};
+
+// ---------------------------------------------------------------------------
 //  FLATLINE — the hidden effect. A tuned feedback comb: the note a monitor
 //  makes when the specimen stops. Feedback is clamped below unity and the
 //  loop is damped, so it rings rather than runs away.
