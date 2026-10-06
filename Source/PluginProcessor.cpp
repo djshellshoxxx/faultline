@@ -71,10 +71,10 @@ float VivisectProcessor::pvMod (const char* pid, int destEnum)
 void VivisectProcessor::triggerSurgeonManual (int i)
 {
     i = juce::jlimit (0, kNumSurgeons - 1, i);
-    rack[i].setParams (pv (sid (i, "p1").toRawUTF8()),
-                       pv (sid (i, "p2").toRawUTF8()),
-                       pv (sid (i, "p3").toRawUTF8()));
-    auto c = scheduler.makeManualContext (pv (sid (i, "p1").toRawUTF8()),
+    rack[i].setParams (pv (sidRaw (i, SP_P1)),
+                       pv (sidRaw (i, SP_P2)),
+                       pv (sidRaw (i, SP_P3)));
+    auto c = scheduler.makeManualContext (pv (sidRaw (i, SP_P1)),
                                           (int) pv (id::sourceSel), pv (id::morph), pv (id::chaos),
                                           60.0 / lastBpm * sampleRate, specimen, analysis);
     rack[i].trigger (c);
@@ -163,12 +163,14 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     modMatrix.setLFO (1, pv (id::lfo2Rate), (int) pv (id::lfo2Shape));
     modMatrix.setMacro (0, pv (id::macro1));
     modMatrix.setMacro (1, pv (id::macro2));
+    static constexpr const char* modSourceIds[kNumModSlots] { "mm1_src", "mm2_src", "mm3_src", "mm4_src" };
+    static constexpr const char* modDestIds[kNumModSlots]   { "mm1_dst", "mm2_dst", "mm3_dst", "mm4_dst" };
+    static constexpr const char* modDepthIds[kNumModSlots]  { "mm1_depth", "mm2_depth", "mm3_depth", "mm4_depth" };
     for (int mIdx = 0; mIdx < kNumModSlots; ++mIdx)
     {
-        const juce::String pre = "mm" + juce::String (mIdx + 1) + "_";
-        modMatrix.setSlot (mIdx, (int) pv ((pre + "src").toRawUTF8()),
-                                 (int) pv ((pre + "dst").toRawUTF8()),
-                                       pv ((pre + "depth").toRawUTF8()));
+        modMatrix.setSlot (mIdx, (int) pv (modSourceIds[mIdx]),
+                                 (int) pv (modDestIds[mIdx]),
+                                       pv (modDepthIds[mIdx]));
     }
     modMatrix.process (n, workBuf.getRMSLevel (0, 0, n));
 
@@ -197,19 +199,19 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     std::array<int,   kNumSurgeons> routeA {};
     for (int s = 0; s < kNumSurgeons; ++s)
     {
-        on[(size_t) s]     = pv (sid (s, "on").toRawUTF8()) > 0.5f;
-        mixA[(size_t) s]   = pv (sid (s, "mix").toRawUTF8());
-        probA[(size_t) s]  = pv (sid (s, "prob").toRawUTF8());
-        p1A[(size_t) s]    = pv (sid (s, "p1").toRawUTF8());
-        routeA[(size_t) s] = (int) pv (sid (s, "route").toRawUTF8());
+        on[(size_t) s]     = pv (sidRaw (s, SP_ON)) > 0.5f;
+        mixA[(size_t) s]   = pv (sidRaw (s, SP_MIX));
+        probA[(size_t) s]  = pv (sidRaw (s, SP_PROB));
+        p1A[(size_t) s]    = pv (sidRaw (s, SP_P1));
+        routeA[(size_t) s] = (int) pv (sidRaw (s, SP_ROUTE));
 
         float q1 = p1A[(size_t) s];
-        float q2 = pv (sid (s, "p2").toRawUTF8());
-        float q3 = pv (sid (s, "p3").toRawUTF8());
-        if (s == S_STUTTER)  q3 = pvMod (sid (0, "p3").toRawUTF8(), 7);
-        if (s == S_GRANULAR) { q2 = pvMod (sid (1, "p2").toRawUTF8(), 8); q3 = pvMod (sid (1, "p3").toRawUTF8(), 9); }
-        if (s == S_CORRUPT)  { q1 = pvMod (sid (3, "p1").toRawUTF8(), 10); q2 = pvMod (sid (3, "p2").toRawUTF8(), 11); }
-        if (s == S_FREEZE)   q3 = pvMod (sid (5, "p3").toRawUTF8(), 12);
+        float q2 = pv (sidRaw (s, SP_P2));
+        float q3 = pv (sidRaw (s, SP_P3));
+        if (s == S_STUTTER)  q3 = pvMod (sidRaw (0, SP_P3), 7);
+        if (s == S_GRANULAR) { q2 = pvMod (sidRaw (1, SP_P2), 8); q3 = pvMod (sidRaw (1, SP_P3), 9); }
+        if (s == S_CORRUPT)  { q1 = pvMod (sidRaw (3, SP_P1), 10); q2 = pvMod (sidRaw (3, SP_P2), 11); }
+        if (s == S_FREEZE)   q3 = pvMod (sidRaw (5, SP_P3), 12);
         rack[s].setParams (q1, q2, q3);
     }
 

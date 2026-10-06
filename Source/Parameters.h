@@ -13,6 +13,7 @@ static constexpr int kNumSurgeons = 6;
 static constexpr int kNumModSlots = 4;
 
 enum SurgeonIndex { S_STUTTER = 0, S_GRANULAR, S_REVERSE, S_CORRUPT, S_REORDER, S_FREEZE };
+enum SurgeonParameter { SP_ON = 0, SP_MIX, SP_PROB, SP_P1, SP_P2, SP_P3, SP_ROUTE };
 
 namespace id
 {
@@ -64,6 +65,24 @@ inline juce::String surgeonTag (int i)
     return juce::String (t[juce::jlimit (0, 5, i)]);
 }
 inline juce::String sid (int i, const char* suffix) { return surgeonTag (i) + "_" + suffix; }
+
+// Audio-thread lookup table. `sid()` is convenient for UI and state code, but
+// constructing its juce::String result inside processBlock allocates. Keep the
+// real-time path on stable string literals instead.
+inline const char* sidRaw (int surgeon, SurgeonParameter parameter) noexcept
+{
+    static constexpr const char* ids[kNumSurgeons][7] {
+        { "st_on", "st_mix", "st_prob", "st_p1", "st_p2", "st_p3", "st_route" },
+        { "gr_on", "gr_mix", "gr_prob", "gr_p1", "gr_p2", "gr_p3", "gr_route" },
+        { "rv_on", "rv_mix", "rv_prob", "rv_p1", "rv_p2", "rv_p3", "rv_route" },
+        { "cr_on", "cr_mix", "cr_prob", "cr_p1", "cr_p2", "cr_p3", "cr_route" },
+        { "ro_on", "ro_mix", "ro_prob", "ro_p1", "ro_p2", "ro_p3", "ro_route" },
+        { "fz_on", "fz_mix", "fz_prob", "fz_p1", "fz_p2", "fz_p3", "fz_route" }
+    };
+    const int s = juce::jlimit (0, kNumSurgeons - 1, surgeon);
+    const int p = juce::jlimit (0, 6, (int) parameter);
+    return ids[s][p];
+}
 
 inline const char* surgeonName (int i)
 {
