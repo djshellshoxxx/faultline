@@ -1,0 +1,10 @@
+build/
+Builds/
+cmake-build-*/
+.vs/
+.vscode/
+.idea/
+*.user
+.DS_Store
+build-linux/
+build-ninja/
