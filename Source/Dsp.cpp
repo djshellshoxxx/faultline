@@ -749,11 +749,17 @@ public:
         freq.assign ((size_t) (2 * N), 0.f);
         tmp.assign ((size_t) N, 0.f);
         ola.assign (RING, 0.f);
+        olaNorm.assign (RING, 0.f);
         winTab.assign (N, 0.f);
         for (int i = 0; i < N; ++i) winTab[(size_t) i] = 0.5f - 0.5f * std::cos (6.2831853f * i / (N - 1));
         reset();
     }
-    void reset() override { std::fill (ola.begin(), ola.end(), 0.f); active = false; act = 0.f; gain = 0.f; }
+    void reset() override
+    {
+        std::fill (ola.begin(), ola.end(), 0.f);
+        std::fill (olaNorm.begin(), olaNorm.end(), 0.f);
+        active = false; act = 0.f; gain = 0.f;
+    }
     void trigger (const TriggerContext& c) override
     {
         const double off = c.sourcePos + pp1 * juce::jmax (0.0, c.lengthSamples - N);
@@ -773,6 +779,7 @@ public:
         durLeft = (int) ((0.2 + pp2 * 3.8) * sr);
         blur = pp3;
         std::fill (ola.begin(), ola.end(), 0.f);
+        std::fill (olaNorm.begin(), olaNorm.end(), 0.f);
         rp = 0; hopCd = 0; gain = 1.f; active = true; startOff = c.startOffset;
         synthFrame (0);
         lastGrabStart.store ((i64) off);
@@ -786,8 +793,11 @@ public:
         for (int i = startOff; i < n; ++i)
         {
             if (hopCd <= 0) { synthFrame (rp); hopCd = H; }
-            const float s = ola[(size_t) (rp % RING)] * gain;
-            ola[(size_t) (rp % RING)] = 0.f;
+            const auto idx = (size_t) (rp % RING);
+            const float norm = olaNorm[idx];
+            const float s = norm > 1.0e-5f ? (ola[idx] / norm) * gain : 0.f;
+            ola[idx] = 0.f;
+            olaNorm[idx] = 0.f;
             L[i] += s; R[i] += s;
             ++rp; --hopCd;
             if (--durLeft <= 0)
@@ -810,13 +820,22 @@ private:
             freq[(size_t) (2 * k + 1)] = mag[(size_t) k] * std::sin (runPhase[(size_t) k]);
         }
         fft.performRealOnlyInverseTransform (freq.data());
-        const float scale = (2.0f / 3.0f) / (float) N;
+        // JUCE's real inverse is unnormalised, so divide by N. Instead of
+        // assuming a fixed 4-hop Hann overlap gain, accumulate the actual
+        // squared-window weight and divide by it when the sample is emitted.
+        // This keeps FREEZE level stable at startup, steady state and tail.
+        const float scale = 1.0f / (float) N;
         for (int i = 0; i < N; ++i)
-            ola[(size_t) ((at + i) % RING)] += freq[(size_t) i] * winTab[(size_t) i] * scale;
+        {
+            const auto idx = (size_t) ((at + i) % RING);
+            const float w = winTab[(size_t) i];
+            ola[idx] += freq[(size_t) i] * w * scale;
+            olaNorm[idx] += w * w;
+        }
     }
     juce::dsp::FFT fft { 11 };
     juce::dsp::WindowingFunction<float> window { (size_t) N, juce::dsp::WindowingFunction<float>::hann };
-    std::vector<float> mag, runPhase, freq, tmp, ola, winTab;
+    std::vector<float> mag, runPhase, freq, tmp, ola, olaNorm, winTab;
     int rp = 0, hopCd = 0, durLeft = 0, startOff = 0;
     float blur = 0.f, gain = 0.f;
     bool active = false;
