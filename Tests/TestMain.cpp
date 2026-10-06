@@ -943,6 +943,191 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    beginCase ("Randomize / Mutate parameter locks persist and protect values");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+
+        auto* chaos = p.apvts.getParameter (vsx::id::chaos);
+        auto* scarMix = p.apvts.getParameter (vsx::id::scarMix);
+        check (chaos != nullptr && scarMix != nullptr, "lock test parameters exist");
+
+        chaos->setValueNotifyingHost (0.314159f);
+        scarMix->setValueNotifyingHost (0.271828f);
+        p.setParameterLocked (vsx::id::chaos, true);
+        p.setParameterLocked (vsx::id::scarMix, true);
+
+        check (p.isParameterLocked (vsx::id::chaos), "Chaos reports locked");
+        check (p.isParameterLocked (vsx::id::scarMix), "SCAR Mix reports locked");
+        check (p.lockedParameterCount() == 2, "lock count reports both locks");
+
+        const float chaosLocked = chaos->getValue();
+        const float scarLocked = scarMix->getValue();
+        for (int i = 0; i < 8; ++i)
+            p.randomizeAll();
+
+        check (std::abs (chaos->getValue() - chaosLocked) < 1.0e-6f,
+               "RANDOM preserves locked Chaos across repeated presses");
+        check (std::abs (scarMix->getValue() - scarLocked) < 1.0e-6f,
+               "RANDOM preserves locked SCAR Mix across repeated presses");
+
+        MemoryBlock blob;
+        p.getStateInformation (blob);
+        VivisectProcessor restored;
+        restored.setStateInformation (blob.getData(), (int) blob.getSize());
+        check (restored.isParameterLocked (vsx::id::chaos)
+               && restored.isParameterLocked (vsx::id::scarMix),
+               "state round trip preserves parameter locks");
+
+        p.setParameterLocked ("no-such-parameter", true);
+        check (p.lockedParameterCount() == 2, "invalid parameter IDs cannot create stale locks");
+
+        p.clearParameterLocks();
+        check (p.lockedParameterCount() == 0
+               && ! p.isParameterLocked (vsx::id::chaos),
+               "clearParameterLocks removes every lock");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Controlled MUTATE creates bounded nearby variations");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        p.resetAllToDefaults();
+
+        auto* amount = p.apvts.getParameter (vsx::id::mutationAmount);
+        check (amount != nullptr, "Mutation Amount parameter exists");
+
+        const auto beforeZero = snapshotParams (p);
+        if (amount != nullptr) amount->setValueNotifyingHost (0.f);
+        p.mutateCurrent();
+        check (snapshotParams (p) == beforeZero, "MUTATE Amount 0 changes no parameters");
+
+        // Infrastructure controls are intentionally not creative mutation targets.
+        const std::map<String, float> protectedBefore {
+            { vsx::id::inputTrim,   p.apvts.getParameter (vsx::id::inputTrim)->getValue() },
+            { vsx::id::outputTrim,  p.apvts.getParameter (vsx::id::outputTrim)->getValue() },
+            { vsx::id::bufferBars,  p.apvts.getParameter (vsx::id::bufferBars)->getValue() },
+            { vsx::id::sourceSel,   p.apvts.getParameter (vsx::id::sourceSel)->getValue() },
+            { vsx::id::midiMode,    p.apvts.getParameter (vsx::id::midiMode)->getValue() },
+            { vsx::id::panicFreeze, p.apvts.getParameter (vsx::id::panicFreeze)->getValue() },
+            { vsx::id::decayArm,    p.apvts.getParameter (vsx::id::decayArm)->getValue() },
+            { vsx::id::flatOn,      p.apvts.getParameter (vsx::id::flatOn)->getValue() }
+        };
+
+        auto* locked = p.apvts.getParameter (vsx::id::chaos);
+        locked->setValueNotifyingHost (0.37f);
+        p.setParameterLocked (vsx::id::chaos, true);
+        const float lockedBefore = locked->getValue();
+
+        if (amount != nullptr) amount->setValueNotifyingHost (1.f);
+        bool anyEligibleChanged = false;
+        const auto baseline = snapshotParams (p);
+
+        for (int i = 0; i < 40; ++i)
+        {
+            p.mutateCurrent();
+            const auto now = snapshotParams (p);
+
+            for (const auto& kv : now)
+                check (kv.second >= 0.f && kv.second <= 1.f,
+                       "mutated normalized parameter remains in range: " + kv.first);
+
+            for (const auto& kv : protectedBefore)
+            {
+                auto* q = p.apvts.getParameter (kv.first);
+                check (q != nullptr && std::abs (q->getValue() - kv.second) < 1.0e-6f,
+                       "MUTATE preserves infrastructure control " + kv.first);
+            }
+
+            check (std::abs (locked->getValue() - lockedBefore) < 1.0e-6f,
+                   "MUTATE preserves locked creative parameters");
+            check (p.apvts.getParameter (vsx::id::flatOn)->getValue() < 0.5f,
+                   "MUTATE never enables hidden FLATLINE");
+
+            for (const auto& kv : now)
+                if (kv.first != vsx::id::mutationAmount)
+                {
+                    const auto it = baseline.find (kv.first);
+                    if (it != baseline.end() && std::abs (it->second - kv.second) > 1.0e-5f)
+                        anyEligibleChanged = true;
+                }
+
+            const auto audio = runBlocks (p, 8, kBlock, kRate, true);
+            check (audio.finite, "mutated state produces finite output");
+            check (audio.peak < ceilingFor (p), "mutated state remains bounded");
+        }
+
+        check (anyEligibleChanged, "non-zero MUTATE produces at least one creative variation");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("A/B comparison does not switch global user settings");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+
+        p.setTooltipsEnabled (false);
+        p.setCCForParam (vsx::id::chaos, 74);
+        p.setParameterLocked (vsx::id::chaos, true);
+
+        p.selectABSlot (1);
+        p.setTooltipsEnabled (true);
+        p.setCCForParam (vsx::id::chaos, 71);
+        p.setParameterLocked (vsx::id::chaos, false);
+
+        p.selectABSlot (0);
+
+        check (p.tooltipsEnabled(), "A/B switch preserves current tooltip preference");
+        check (p.getCCForParam (vsx::id::chaos) == 71, "A/B switch preserves current MIDI mapping");
+        check (! p.isParameterLocked (vsx::id::chaos), "A/B switch preserves current parameter-lock state");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Preset loads do not overwrite global user settings");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+
+        p.setTooltipsEnabled (false);
+        p.setCCForParam (vsx::id::chaos, 74);
+        p.setParameterLocked (vsx::id::chaos, true);
+
+        auto tmp = File::getSpecialLocation (File::tempDirectory)
+                     .getChildFile ("vivisect_settings_isolation.vsxpreset");
+        tmp.deleteFile();
+        check (p.savePresetToFile (tmp), "settings-isolation preset saves");
+
+        p.setTooltipsEnabled (true);
+        p.setCCForParam (vsx::id::chaos, 71);
+        p.setParameterLocked (vsx::id::chaos, false);
+        check (p.loadPresetFromFile (tmp), "settings-isolation preset reloads");
+
+        check (p.tooltipsEnabled(), "preset load preserves current tooltip preference");
+        check (p.getCCForParam (vsx::id::chaos) == 71, "preset load preserves current MIDI mapping");
+        check (! p.isParameterLocked (vsx::id::chaos), "preset load preserves current parameter-lock state");
+
+        tmp.deleteFile();
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Hard reset restores documented default MIDI mappings");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        p.setCCForParam (vsx::id::macro1, 90);
+        p.setParameterLocked (vsx::id::chaos, true);
+
+        p.hardResetAllSettings();
+
+        check (p.getCCForParam (vsx::id::macro1) == 20, "Hard Reset restores CC20 -> Macro 1");
+        check (p.getCCForParam (vsx::id::macro2) == 21, "Hard Reset restores CC21 -> Macro 2");
+        check (p.getCCForParam (vsx::id::chaos) == 22, "Hard Reset restores CC22 -> Chaos");
+        check (p.getCCForParam (vsx::id::triggerRate) == 23, "Hard Reset restores CC23 -> Trigger Rate");
+        check (p.lockedParameterCount() == 0, "Hard Reset clears Randomize / Mutate locks");
+    }
+
+    // -----------------------------------------------------------------------
     beginCase ("RANDOM never reveals the hidden effect");
     {
         VivisectProcessor p;
