@@ -1304,7 +1304,7 @@ bool VivisectProcessor::savePresetToFile (const juce::File& f)
 {
     if (f == juce::File()) return false;
     f.getParentDirectory().createDirectory();
-    if (auto xml = apvts.copyState().createXml())
+    if (auto xml = soundStateSnapshot().createXml())
         if (xml->writeTo (f))
         {
             lastPresetFile = f;

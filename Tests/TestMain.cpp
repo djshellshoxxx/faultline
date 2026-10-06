@@ -800,6 +800,9 @@ int main()
                 q->setValueNotifyingHost (s == vsx::S_FREEZE ? 1.f : 0.f);
         if (auto* q = p.apvts.getParameter (vsx::id::dryWet)) q->setValueNotifyingHost (1.f);
         if (auto* q = p.apvts.getParameter (vsx::sid (vsx::S_FREEZE, "mix"))) q->setValueNotifyingHost (1.f);
+        // This case validates the manual capture path; disable automatic
+        // scheduling so it cannot overwrite the capture with a later silent slice.
+        if (auto* q = p.apvts.getParameter (vsx::id::midiMode)) q->setValueNotifyingHost (1.f);
 
         float minPeak = 1000.f, maxPeak = 0.f;
         for (float blur : { 0.f, 0.25f, 0.5f, 0.75f, 1.f })
@@ -1122,6 +1125,9 @@ int main()
                      .getChildFile ("vivisect_settings_isolation.vsxpreset");
         tmp.deleteFile();
         check (p.savePresetToFile (tmp), "settings-isolation preset saves");
+        if (auto xml = XmlDocument::parse (tmp))
+            check (xml->getChildByName ("VSX_SETTINGS") == nullptr,
+                   "user preset files exclude global settings");
 
         p.setTooltipsEnabled (true);
         p.setCCForParam (vsx::id::chaos, 71);
