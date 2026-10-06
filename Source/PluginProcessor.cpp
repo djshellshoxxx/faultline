@@ -33,6 +33,8 @@ bool VivisectProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
 
 void VivisectProcessor::prepareToPlay (double sr, int block)
 {
+    scar.reset();
+    scarWasOn = false;
     flatline.prepare (sr, block);
     sampleRate = sr;
     specimen.prepare (sr, 45.0);
@@ -294,6 +296,18 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         float* o = workBuf.getWritePointer (ch);
         for (int i = 0; i < n; ++i)
             o[i] = (d[i] * (1.f - dw * maxAct) + w[i] * dw) * outG;
+    }
+
+    // ---- SCAR (master texture effect) --------------------------------
+    if (pv (id::scarOn) > 0.5f)
+    {
+        scar.process (workBuf, n, pv (id::scarDrive), pv (id::scarMix));
+        scarWasOn = true;
+    }
+    else if (scarWasOn)
+    {
+        scar.reset();
+        scarWasOn = false;
     }
 
     // ---- FLATLINE (hidden effect) ------------------------------------
@@ -1018,6 +1032,9 @@ void VivisectProcessor::randomizeAll()
     setNorm   (id::analysisInform, rr (0.f, 1.f));
     setNorm   (id::morph,          rr (0.f, 1.f));
     setNorm   (id::scAmount,       rr (0.f, 1.f));
+    setNorm   (id::scarOn,          rng.nextFloat() < 0.35f ? 1.f : 0.f);
+    setNorm   (id::scarDrive,       rr (0.08f, 0.82f));
+    setNorm   (id::scarMix,         rr (0.15f, 0.72f));
 
     // -- surgeons ------------------------------------------------------------
     bool anyOn = false;
@@ -1111,10 +1128,19 @@ bool VivisectProcessor::loadPresetFromFile (const juce::File& f)
 //  Vivisect is an effect, so this is the "special function" export -- the
 //  specimen itself, exactly as the surgeons currently see it.
 // ===========================================================================
-bool VivisectProcessor::exportSpecimenToWav (const juce::File& f)
+bool VivisectProcessor::exportSpecimenToWav (const juce::File& f, int bitDepth,
+                                                   double* secondsWritten)
 {
+    if (secondsWritten != nullptr)
+        *secondsWritten = 0.0;
+
     const int cap = specimen.capacitySamples();
     if (cap <= 1) return false;
+
+    // WAV export supports the common PCM depths exposed by the UI. Rejecting
+    // anything else keeps callers from silently getting a different quality.
+    if (bitDepth != 16 && bitDepth != 24 && bitDepth != 32)
+        return false;
 
     suspendProcessing (true);
     const double sr = specimen.getSampleRate();
@@ -1142,10 +1168,14 @@ bool VivisectProcessor::exportSpecimenToWav (const juce::File& f)
     if (os == nullptr || ! os->openedOk()) return false;
 
     juce::WavAudioFormat wav;
-    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), sr, 2, 24, {}, 0));
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), sr, 2, bitDepth, {}, 0));
     if (w == nullptr) return false;
     os.release();                                  // the writer owns the stream now
-    return w->writeFromAudioSampleBuffer (out, 0, n);
+
+    const bool ok = w->writeFromAudioSampleBuffer (out, 0, n);
+    if (ok && secondsWritten != nullptr)
+        *secondsWritten = (double) n / juce::jmax (1.0, sr);
+    return ok;
 }
 
 juce::AudioProcessorEditor* VivisectProcessor::createEditor() { return new VivisectEditor (*this); }
