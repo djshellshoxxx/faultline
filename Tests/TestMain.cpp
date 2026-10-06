@@ -726,6 +726,89 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    beginCase ("Euclidean reorder pattern has exact pulse counts and spacing");
+    {
+        for (int steps = 2; steps <= 16; ++steps)
+            for (int pulses = 1; pulses <= steps; ++pulses)
+            {
+                std::array<int, 64> pattern {};
+                const int n = vsx::buildEuclideanPattern (steps, pulses, pattern);
+                check (n == steps, "Euclidean pattern returns every requested step");
+
+                int ones = 0;
+                for (int i = 0; i < n; ++i)
+                    ones += pattern[(size_t) i] != 0 ? 1 : 0;
+                check (ones == pulses, "Euclidean pattern preserves pulse count");
+
+                if (pulses > 1 && pulses < steps)
+                {
+                    std::vector<int> gaps;
+                    int last = -1, first = -1;
+                    for (int i = 0; i < n; ++i)
+                        if (pattern[(size_t) i] != 0)
+                        {
+                            if (first < 0) first = i;
+                            if (last >= 0) gaps.push_back (i - last);
+                            last = i;
+                        }
+                    gaps.push_back (first + n - last);
+
+                    const auto mm = std::minmax_element (gaps.begin(), gaps.end());
+                    check (*mm.second - *mm.first <= 1,
+                           "Euclidean pulse gaps differ by at most one step");
+                }
+            }
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Random Walk modulation is independent of host block size");
+    {
+        vsx::ModMatrix a, b;
+        a.prepare (kRate);
+        b.prepare (kRate);
+
+        // Same elapsed audio time, radically different host block sizes.
+        for (int i = 0; i < (int) kRate / 64; ++i)  a.process (64, 0.2f);
+        for (int i = 0; i < (int) kRate / 512; ++i) b.process (512, 0.2f);
+
+        check (std::abs (a.sourceValue (6) - b.sourceValue (6)) < 0.03f,
+               "random-walk value is effectively block-size invariant after one second");
+        check (std::abs (a.sourceValue (6)) <= 1.f && std::abs (b.sourceValue (6)) <= 1.f,
+               "random-walk output remains bounded");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("FREEZE remains finite and reasonably level across blur");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        p.resetAllToDefaults();
+
+        for (int s = 0; s < vsx::kNumSurgeons; ++s)
+            if (auto* q = p.apvts.getParameter (vsx::sid (s, "on")))
+                q->setValueNotifyingHost (s == vsx::S_FREEZE ? 1.f : 0.f);
+        if (auto* q = p.apvts.getParameter (vsx::id::dryWet)) q->setValueNotifyingHost (1.f);
+        if (auto* q = p.apvts.getParameter (vsx::sid (vsx::S_FREEZE, "mix"))) q->setValueNotifyingHost (1.f);
+
+        float minPeak = 1000.f, maxPeak = 0.f;
+        for (float blur : { 0.f, 0.25f, 0.5f, 0.75f, 1.f })
+        {
+            if (auto* q = p.apvts.getParameter (vsx::sid (vsx::S_FREEZE, "p3")))
+                q->setValueNotifyingHost (blur);
+
+            runBlocks (p, 40, kBlock, kRate, false);
+            p.triggerSurgeonManual (vsx::S_FREEZE);
+            const auto v = runBlocks (p, 30, kBlock, kRate, false, true);
+            check (v.finite, "FREEZE output remains finite across blur");
+            minPeak = jmin (minPeak, v.peak);
+            maxPeak = jmax (maxPeak, v.peak);
+        }
+
+        check (maxPeak < kCeiling, "FREEZE stays bounded at all blur settings");
+        check (minPeak > 0.001f, "FREEZE does not collapse to silence after a valid capture");
+    }
+
+    // -----------------------------------------------------------------------
     beginCase ("SCAR master texture is bounded and automatable");
     {
         VivisectProcessor p;
