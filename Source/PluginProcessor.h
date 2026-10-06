@@ -20,6 +20,7 @@ public:
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout&) const override;
+    using juce::AudioProcessor::processBlock;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -43,13 +44,18 @@ public:
     // -- editor-facing ------------------------------------------------------
     juce::AudioProcessorValueTreeState apvts;
     vsx::TelemetryRing telem;
+    vsx::Scar scar;
+    bool scarWasOn = false;
     vsx::Flatline flatline;
     bool flatlineWasOn = false;
     bool crashLogOn = false;            // never restored from state, by design
     juce::File crashLogFile;
 
     void buildMonitorSnapshot (vsx::MonitorSnapshot&);
-    float surgeonActivity (int i) const { return surgAct[juce::jlimit (0, vsx::kNumSurgeons - 1, i)].load(); }
+    float surgeonActivity (int i) const
+    {
+        return surgAct[(size_t) juce::jlimit (0, vsx::kNumSurgeons - 1, i)].load();
+    }
     float buildPulse() const { return pulseSmooth.load(); }
     float outputPeak (int ch) const { return outPeak[(size_t) juce::jlimit (0, 1, ch)].load(); }
 
@@ -79,7 +85,8 @@ public:
 
     // export the current specimen buffer as a wav (the "special function"
     // export for an effect: the butchered specimen itself)
-    bool exportSpecimenToWav (const juce::File&);
+    bool exportSpecimenToWav (const juce::File&, int bitDepth = 24,
+                              double* secondsWritten = nullptr);
 
     int  historyCount() const { return histCount; }
     void rewindToNormalized (float x);

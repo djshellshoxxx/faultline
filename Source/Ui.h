@@ -106,6 +106,7 @@ class VsxButton : public juce::TextButton,
                   private juce::Timer
 {
 public:
+    using juce::Button::clicked;
     VsxButton (const juce::String& text, ParamHost* = nullptr, juce::String paramID = {});
     void mouseDown (const juce::MouseEvent&) override;
     void clicked() override;

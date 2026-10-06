@@ -72,11 +72,11 @@ VsxButton& VivisectEditor::addParamButton (const char* pid, const juce::String& 
 // ===========================================================================
 VivisectEditor::VivisectEditor (VivisectProcessor& p)
     : juce::AudioProcessorEditor (p), proc (p),
-      monitor ([&p] (MonitorSnapshot& s) { p.buildMonitorSnapshot (s); }),
-      pulse ([&p] { return p.buildPulse(); }, [&p] { return p.apvts.getRawParameterValue (id::chaos)->load(); }),
       led ([&p] (int ch) { return p.outputPeak (ch); }),
       stream ([&p] (vsx::TelemetryEvent* dest, int max) { return p.telemetry().drain (dest, max); },
               [&p] (int idx) { return p.describeParam (idx); }),
+      monitor ([&p] (MonitorSnapshot& s) { p.buildMonitorSnapshot (s); }),
+      pulse ([&p] { return p.buildPulse(); }, [&p] { return p.apvts.getRawParameterValue (id::chaos)->load(); }),
       meter ([&p] (int ch) { return p.outputPeak (ch); }),
       history ([&p] { return p.historyCount(); }, [&p] (float x) { p.rewindToNormalized (x); })
 {
@@ -132,6 +132,14 @@ VivisectEditor::VivisectEditor (VivisectProcessor& p)
                               "Freezes the specimen buffer and holds it on the Freeze surgeon.");
     bDecay = &addParamButton (id::decayArm, "DECAY OVER TIME",
                               "Arms a slow drive of chaos and corruption to maximum over Decay T seconds.");
+    bScar  = &addParamButton (id::scarOn, "SCAR",
+                              "Master texture effect. Adds bounded soft saturation and torn transient edges.");
+    kScarDrive = &addKnob (id::scarDrive, "SCAR DRIVE",
+                           "How hard SCAR pushes the post-rack signal into its soft clipper.",
+                           VsxSlider::Size::small);
+    kScarMix = &addKnob (id::scarMix, "SCAR MIX",
+                         "Dry/wet amount for the SCAR master texture effect.",
+                         VsxSlider::Size::small);
 
     // -- modulation ----------------------------------------------------------
     kL1r  = &addKnob (id::lfo1Rate, "LFO 1", "LFO 1 rate, in Hz.");
@@ -244,10 +252,10 @@ VivisectEditor::VivisectEditor (VivisectProcessor& p)
           << "A/B slot     " << (proc.currentABSlot() == 0 ? "A" : "B") << "\n"
           << "history      " << proc.historyCount() << " frames\n"
           << "\n";
-        for (auto* p : proc.getParameters())
-            if (auto* wid = dynamic_cast<juce::AudioProcessorParameterWithID*> (p))
-                s << wid->paramID.paddedRight (' ', 18) << " " << p->getCurrentValueAsText()
-                  << "   [" << juce::String (p->getValue(), 4) << "]\n";
+        for (auto* parameter : proc.getParameters())
+            if (auto* wid = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
+                s << wid->paramID.paddedRight (' ', 18) << " " << parameter->getCurrentValueAsText()
+                  << "   [" << juce::String (parameter->getValue(), 4) << "]\n";
         return s;
     };
 
@@ -407,23 +415,32 @@ void VivisectEditor::doOpen()
                           });
 }
 
-void VivisectEditor::doExportSpecimen()
+void VivisectEditor::doExportSpecimen (int bitDepth)
 {
     const auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
     chooser = std::make_unique<juce::FileChooser> ("Export specimen buffer", dir, "*.wav");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                             | juce::FileBrowserComponent::warnAboutOverwriting,
-                          [this] (const juce::FileChooser& fc)
+                          [this, bitDepth] (const juce::FileChooser& fc)
                           {
                               const auto f = fc.getResult();
                               if (f == juce::File()) return;
-                              const bool ok = proc.exportSpecimenToWav (f.withFileExtension ("wav"));
+                              const auto wavFile = f.withFileExtension ("wav");
+                              double seconds = 0.0;
+                              const bool ok = proc.exportSpecimenToWav (wavFile, bitDepth, &seconds);
+                              const auto success = "Saved successfully.\n\n"
+                                                   "Name: " + wavFile.getFileName() + "\n"
+                                                   "Location: " + wavFile.getParentDirectory().getFullPathName() + "\n"
+                                                   "Length: " + juce::String (seconds, 2) + " seconds\n"
+                                                   "Quality: " + juce::String (bitDepth) + "-bit PCM WAV";
                               juce::NativeMessageBox::showAsync (
                                   juce::MessageBoxOptions()
-                                      .withIconType (juce::MessageBoxIconType::NoIcon)
+                                      .withIconType (ok ? juce::MessageBoxIconType::InfoIcon
+                                                        : juce::MessageBoxIconType::WarningIcon)
                                       .withTitle ("Export specimen")
-                                      .withMessage (ok ? "Wrote " + f.withFileExtension ("wav").getFullPathName()
-                                                       : "Nothing in the specimen buffer to export yet.")
+                                      .withMessage (ok ? success
+                                                       : "Nothing in the specimen buffer to export yet, "
+                                                         "or the destination could not be written.")
                                       .withButton ("OK"),
                                   nullptr);
                           });
@@ -529,7 +546,11 @@ void VivisectEditor::showMainMenu()
     m.addItem (6, "Clear Sample A", proc.slotHasSample (0));
     m.addItem (7, "Clear Sample B", proc.slotHasSample (1));
     m.addSeparator();
-    m.addItem (8, "Export Specimen to WAV...");
+    juce::PopupMenu exportMenu;
+    exportMenu.addItem (81, "16-bit PCM WAV");
+    exportMenu.addItem (82, "24-bit PCM WAV");
+    exportMenu.addItem (83, "32-bit PCM WAV");
+    m.addSubMenu ("Export Specimen to WAV", exportMenu);
     m.addSeparator();
     m.addItem (11, "Open Preset Folder");
     m.addItem (12, "Show Last Saved Preset", proc.getLastPresetFile().existsAsFile());
@@ -549,7 +570,9 @@ void VivisectEditor::showMainMenu()
                              case 5:  chooseSample (1); break;
                              case 6:  proc.clearSampleSlot (0); break;
                              case 7:  proc.clearSampleSlot (1); break;
-                             case 8:  doExportSpecimen(); break;
+                             case 81: doExportSpecimen (16); break;
+                             case 82: doExportSpecimen (24); break;
+                             case 83: doExportSpecimen (32); break;
                              case 9:  showOverlay (&options); break;
                              case 10: showOverlay (&help);    break;
                              case 11: { auto d = proc.getUserPresetDir();
@@ -730,6 +753,10 @@ void VivisectEditor::resized()
     pb (bMidi, 112);
     pb (bPanic, 128);
     pb (bDecay, 152);
+    pb (bScar, 72);
+    kScarDrive->setBounds (btnRow.removeFromLeft (64));
+    btnRow.removeFromLeft (kG / 2);
+    kScarMix->setBounds (btnRow.removeFromLeft (64));
     saveBtn.setBounds (btnRow.removeFromRight (136));
 
     // -- modulation ----------------------------------------------------------

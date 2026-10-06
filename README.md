@@ -133,6 +133,8 @@ Each surgeon has **On**, **Mix**, **Prob** (activity probability) and **Route In
 * **Panic Freeze** — freezes the buffer and holds it on the Freeze surgeon.
 * **Decay Over Time** — progressively drives chaos + corruption to maximum across
   `Decay T` seconds.
+* **SCAR** — optional post-rack texture stage. Drive adds bounded soft saturation
+  plus a torn transient edge; Mix blends it against the untreated master signal.
 
 ## Mod matrix
 
@@ -143,7 +145,7 @@ Rate, Freeze Blur.
 
 ## Live / MIDI
 
-* Notes **C2–F2** (36–41… actually 48–53, i.e. C3–F3) trigger surgeons 1–6.
+* Notes **C3–F3** (MIDI note numbers 48–53) trigger surgeons 1–6.
 * **CC20** Macro 1 · **CC21** Macro 2 · **CC22** Chaos · **CC23** Trigger Rate.
 * **MIDI Mode** suppresses the auto-scheduler so the plugin is a pure
   performance instrument.
@@ -193,10 +195,13 @@ Build order from the brief, and where this tree currently sits:
 9. character presets — **done** (6 vibes)
 10. UI polish + marketing — **first pass**
 
-Known rough edges: the UI monitor reads DSP state without a lock (display only,
-benign); FREEZE loudness needs calibration by ear; the mod-matrix random-walk is
-crude; `Reorder` Euclidean ordering is a front-loaded approximation of
-Bjorklund.
+Current audit notes: the UI monitor reads DSP state without a lock (display only,
+benign). FREEZE now uses the correct constant gain compensation for its 75%-overlapped
+Hann synthesis windows, avoiding both the old attenuation and edge spikes. Random Walk advances on a fixed internal clock so its
+behaviour is independent of host buffer size. Reorder's Euclidean mode uses a
+maximally-even Bjorklund-style pattern instead of front-loading pulse slices.
+The specimen exporter supports 16/24/32-bit PCM WAV and reports filename, folder,
+duration and selected quality.
 
 
 ## Plain-language overview

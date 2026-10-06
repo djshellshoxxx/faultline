@@ -338,6 +338,46 @@ float readSource (const TriggerContext& c, int ch, double absPos) noexcept
 // ===========================================================================
 //  Surgeons
 // ===========================================================================
+int buildEuclideanPattern (int steps, int pulses, std::array<int, 64>& pattern) noexcept
+{
+    pattern.fill (0);
+    steps  = juce::jlimit (1, (int) pattern.size(), steps);
+    pulses = juce::jlimit (0, steps, pulses);
+    if (pulses == 0)
+        return steps;
+    if (pulses == steps)
+    {
+        for (int i = 0; i < steps; ++i) pattern[(size_t) i] = 1;
+        return steps;
+    }
+
+    // Bresenham/Bjorklund-equivalent distribution. Starting with a pulse gives
+    // a stable canonical rotation, while every circular gap differs by at most
+    // one step.
+    int bucket = 0;
+    for (int i = 0; i < steps; ++i)
+    {
+        bucket += pulses;
+        if (bucket >= steps)
+        {
+            bucket -= steps;
+            pattern[(size_t) i] = 1;
+        }
+    }
+
+    // Rotate so the canonical pattern begins on a pulse.
+    int first = 0;
+    while (first < steps && pattern[(size_t) first] == 0) ++first;
+    if (first > 0 && first < steps)
+    {
+        std::array<int, 64> copy = pattern;
+        for (int i = 0; i < steps; ++i)
+            pattern[(size_t) i] = copy[(size_t) ((i + first) % steps)];
+    }
+    return steps;
+}
+
+// ---------------------------------------------------------------------------
 namespace
 {
 inline float lerpBuf (const juce::AudioBuffer<float>& b, int ch, double p, int len)
@@ -674,11 +714,17 @@ private:
         else
         {
             std::array<int, 64> pat {};
-            const int k = nn / 2 + 1;
-            int bucket = 0;
-            for (int i = 0; i < nn; ++i) { bucket += k; if (bucket >= nn) { bucket -= nn; pat[(size_t) i] = 1; } }
-            for (int i = 0; i < nn; ++i) if (pat[(size_t) i]) push (i);
-            for (int i = 0; i < nn; ++i) if (! pat[(size_t) i]) push (i);
+            const int pulses = nn / 2 + 1;
+            buildEuclideanPattern (nn, pulses, pat);
+
+            // Use the Euclidean rhythm to interleave the two halves of the
+            // source region. This keeps every slice exactly once while making
+            // the audible permutation follow the maximally-even pattern,
+            // instead of front-loading all "hit" slices and then all rests.
+            int pulseSlice = 0;
+            int restSlice = pulses;
+            for (int i = 0; i < nn; ++i)
+                push (pat[(size_t) i] != 0 ? pulseSlice++ : restSlice++);
         }
         if (orderLen == 0) push (0);
     }
@@ -707,7 +753,11 @@ public:
         for (int i = 0; i < N; ++i) winTab[(size_t) i] = 0.5f - 0.5f * std::cos (6.2831853f * i / (N - 1));
         reset();
     }
-    void reset() override { std::fill (ola.begin(), ola.end(), 0.f); active = false; act = 0.f; gain = 0.f; }
+    void reset() override
+    {
+        std::fill (ola.begin(), ola.end(), 0.f);
+        active = false; act = 0.f; gain = 0.f;
+    }
     void trigger (const TriggerContext& c) override
     {
         const double off = c.sourcePos + pp1 * juce::jmax (0.0, c.lengthSamples - N);
@@ -727,7 +777,7 @@ public:
         durLeft = (int) ((0.2 + pp2 * 3.8) * sr);
         blur = pp3;
         std::fill (ola.begin(), ola.end(), 0.f);
-        rp = 0; hopCd = 0; gain = 1.f; active = true; startOff = c.startOffset;
+        rp = 0; hopCd = H; gain = 1.f; active = true; startOff = c.startOffset;
         synthFrame (0);
         lastGrabStart.store ((i64) off);
         lastGrabLen.store (N);
@@ -740,8 +790,9 @@ public:
         for (int i = startOff; i < n; ++i)
         {
             if (hopCd <= 0) { synthFrame (rp); hopCd = H; }
-            const float s = ola[(size_t) (rp % RING)] * gain;
-            ola[(size_t) (rp % RING)] = 0.f;
+            const auto idx = (size_t) (rp % RING);
+            const float s = ola[idx] * gain;
+            ola[idx] = 0.f;
             L[i] += s; R[i] += s;
             ++rp; --hopCd;
             if (--durLeft <= 0)
@@ -764,9 +815,17 @@ private:
             freq[(size_t) (2 * k + 1)] = mag[(size_t) k] * std::sin (runPhase[(size_t) k]);
         }
         fft.performRealOnlyInverseTransform (freq.data());
-        const float scale = (2.0f / 3.0f) / (float) N;
+        // JUCE's inverse FFT is already normalised. With H=N/4, squared Hann
+        // synthesis windows have a steady overlap gain of 1.5, so 2/3 is the
+        // COLA compensation. A constant gain is important here: BLUR changes
+        // spectral phase, so dividing by tiny per-sample window weights near
+        // frame edges can create large spikes.
+        constexpr float overlapGain = 2.0f / 3.0f;
         for (int i = 0; i < N; ++i)
-            ola[(size_t) ((at + i) % RING)] += freq[(size_t) i] * winTab[(size_t) i] * scale;
+        {
+            const auto idx = (size_t) ((at + i) % RING);
+            ola[idx] += freq[(size_t) i] * winTab[(size_t) i] * overlapGain;
+        }
     }
     juce::dsp::FFT fft { 11 };
     juce::dsp::WindowingFunction<float> window { (size_t) N, juce::dsp::WindowingFunction<float>::hann };
@@ -868,10 +927,15 @@ TriggerContext SliceScheduler::makeManualContext (float p1, int sourceSelect, fl
     c.sourceSelect = sourceSelect;
     c.morph = morph;
     c.nowPos = spec.writePos();
-    const double len = juce::jlimit (0.01 * sampleRate, 2.0 * sampleRate, spb * (0.25 + p1 * 1.5));
-    const i64 minAbs = c.nowPos - spec.capacitySamples() + 8;
+    const i64 minAbs = std::max<i64> (0, c.nowPos - spec.capacitySamples() + 8);
+    const double minLen = 0.01 * sampleRate;
+    const double available = juce::jmax (minLen, (double) c.nowPos - (double) minAbs - 4.0);
+    const double len = juce::jlimit (minLen, juce::jmin (2.0 * sampleRate, available),
+                                     spb * (0.25 + p1 * 1.5));
     double srcPos = (double) c.nowPos - (0.5 + rng.nextFloat() * 2.0) * spb;
-    srcPos = juce::jlimit ((double) minAbs, (double) c.nowPos - len - 4.0, srcPos);
+    srcPos = juce::jlimit ((double) minAbs,
+                          juce::jmax ((double) minAbs, (double) c.nowPos - len - 4.0),
+                          srcPos);
     c.sourcePos = srcPos;
     c.lengthSamples = len;
     c.startOffset = 0;
@@ -884,6 +948,7 @@ TriggerContext SliceScheduler::makeManualContext (float p1, int sourceSelect, fl
 void ModMatrix::prepare (double sr)
 {
     sampleRate = sr;
+    walkTickSamples = juce::jmax (1, (int) std::llround (sampleRate / 50.0));
     reset();
 }
 void ModMatrix::reset()
@@ -894,6 +959,8 @@ void ModMatrix::reset()
     shPhase[0] = shPhase[1] = 1.f;
     env = 0.f;
     walk = 0.f;
+    walkVelocity = 0.f;
+    walkSamples = 0;
 }
 void ModMatrix::process (int n, float inputRms) noexcept
 {
@@ -920,7 +987,23 @@ void ModMatrix::process (int n, float inputRms) noexcept
     }
     const float target = juce::jlimit (0.f, 1.f, inputRms * 4.f);
     env += (target - env) * juce::jlimit (0.f, 1.f, 8.f * n / (float) sampleRate);
-    walk = juce::jlimit (-1.f, 1.f, walk * 0.999f + (rng.nextFloat() * 2.f - 1.f) * 0.02f);
+
+    // Advance the random walk on a fixed 50 Hz internal clock, not once per
+    // host block. That makes the modulation character consistent at 32, 64,
+    // 512 or 2048 sample buffers.
+    walkSamples += juce::jmax (0, n);
+    while (walkSamples >= walkTickSamples)
+    {
+        walkSamples -= walkTickSamples;
+        const float impulse = (rng.nextFloat() * 2.f - 1.f) * 0.075f;
+        walkVelocity = juce::jlimit (-0.18f, 0.18f, walkVelocity * 0.82f + impulse);
+        walk = juce::jlimit (-1.f, 1.f, walk + walkVelocity);
+
+        // Reflect velocity at the walls rather than pinning there; this avoids
+        // long flat shelves at +/-1 while keeping the source strictly bounded.
+        if ((walk >= 1.f && walkVelocity > 0.f) || (walk <= -1.f && walkVelocity < 0.f))
+            walkVelocity *= -0.65f;
+    }
 }
 float ModMatrix::sourceValue (int src) const noexcept
 {

@@ -32,6 +32,11 @@ namespace id
     constexpr auto outputTrim     = "outputTrim";
     constexpr auto midiMode       = "midiMode";
 
+    // ---- SCAR: post-rack master texture effect ----------------------------
+    constexpr auto scarOn          = "scarOn";
+    constexpr auto scarDrive       = "scarDrive";
+    constexpr auto scarMix         = "scarMix";
+
     // --- FLATLINE: the hidden effect behind the corner notch ----------------
     constexpr auto flatOn         = "flatOn";
     constexpr auto flatTone       = "flatTone";
@@ -115,6 +120,10 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     p.add (std::make_unique<F> (pid (id::inputTrim), "Input Trim", R { -24.f, 24.f, 0.01f }, 0.f));
     p.add (std::make_unique<F> (pid (id::outputTrim), "Output Trim", R { -24.f, 24.f, 0.01f }, 0.f));
     p.add (std::make_unique<B> (pid (id::midiMode), "MIDI Mode", false));
+
+    p.add (std::make_unique<B> (pid (id::scarOn), "Scar", false));
+    p.add (std::make_unique<F> (pid (id::scarDrive), "Scar Drive", R { 0.f, 1.f, 0.0001f }, 0.35f));
+    p.add (std::make_unique<F> (pid (id::scarMix), "Scar Mix", R { 0.f, 1.f, 0.0001f }, 0.45f));
 
     // FLATLINE. Hidden in the UI until the corner notch is clicked, but a real
     // parameter set all the same, so it automates and saves like anything else.

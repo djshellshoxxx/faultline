@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Vivisect VERSION 0.9.0 LANGUAGES C CXX)
+project(Vivisect VERSION 0.9.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,10 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(JUCE_TAG "8.0.4" CACHE STRING "JUCE git tag")
 option(VIVISECT_SYSTEM_JUCE "Use find_package(JUCE) instead of fetching" OFF)
 
+# CLAP also uses FetchContent below, so load the module regardless of whether
+# JUCE itself comes from find_package() or from the network.
+include(FetchContent)
+
 if(VIVISECT_SYSTEM_JUCE)
     find_package(JUCE CONFIG REQUIRED)
 else()
-    include(FetchContent)
     FetchContent_Declare(JUCE
         GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
         GIT_TAG ${JUCE_TAG}

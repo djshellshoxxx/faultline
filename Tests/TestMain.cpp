@@ -726,6 +726,174 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    beginCase ("Euclidean reorder pattern has exact pulse counts and spacing");
+    {
+        for (int steps = 2; steps <= 16; ++steps)
+            for (int pulses = 1; pulses <= steps; ++pulses)
+            {
+                std::array<int, 64> pattern {};
+                const int n = vsx::buildEuclideanPattern (steps, pulses, pattern);
+                check (n == steps, "Euclidean pattern returns every requested step");
+
+                int ones = 0;
+                for (int i = 0; i < n; ++i)
+                    ones += pattern[(size_t) i] != 0 ? 1 : 0;
+                check (ones == pulses, "Euclidean pattern preserves pulse count");
+
+                if (pulses > 1 && pulses < steps)
+                {
+                    std::vector<int> gaps;
+                    int last = -1, first = -1;
+                    for (int i = 0; i < n; ++i)
+                        if (pattern[(size_t) i] != 0)
+                        {
+                            if (first < 0) first = i;
+                            if (last >= 0) gaps.push_back (i - last);
+                            last = i;
+                        }
+                    gaps.push_back (first + n - last);
+
+                    const auto mm = std::minmax_element (gaps.begin(), gaps.end());
+                    check (*mm.second - *mm.first <= 1,
+                           "Euclidean pulse gaps differ by at most one step");
+                }
+            }
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Random Walk modulation is independent of host block size");
+    {
+        vsx::ModMatrix a, b;
+        a.prepare (kRate);
+        b.prepare (kRate);
+
+        // Same elapsed audio time, radically different host block sizes.
+        const int total = (int) kRate;
+        for (int done = 0; done < total; )
+        {
+            const int n = jmin (64, total - done);
+            a.process (n, 0.2f);
+            done += n;
+        }
+        for (int done = 0; done < total; )
+        {
+            const int n = jmin (512, total - done);
+            b.process (n, 0.2f);
+            done += n;
+        }
+
+        check (std::abs (a.sourceValue (6) - b.sourceValue (6)) < 1.0e-5f,
+               "random-walk value is effectively block-size invariant after one second");
+        check (std::abs (a.sourceValue (6)) <= 1.f && std::abs (b.sourceValue (6)) <= 1.f,
+               "random-walk output remains bounded");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("FREEZE remains finite and reasonably level across blur");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        p.resetAllToDefaults();
+
+        for (int s = 0; s < vsx::kNumSurgeons; ++s)
+            if (auto* q = p.apvts.getParameter (vsx::sid (s, "on")))
+                q->setValueNotifyingHost (s == vsx::S_FREEZE ? 1.f : 0.f);
+        if (auto* q = p.apvts.getParameter (vsx::id::dryWet)) q->setValueNotifyingHost (1.f);
+        if (auto* q = p.apvts.getParameter (vsx::sid (vsx::S_FREEZE, "mix"))) q->setValueNotifyingHost (1.f);
+
+        float minPeak = 1000.f, maxPeak = 0.f;
+        for (float blur : { 0.f, 0.25f, 0.5f, 0.75f, 1.f })
+        {
+            if (auto* q = p.apvts.getParameter (vsx::sid (vsx::S_FREEZE, "p3")))
+                q->setValueNotifyingHost (blur);
+
+            runBlocks (p, 40, kBlock, kRate, false);
+            p.triggerSurgeonManual (vsx::S_FREEZE);
+            const auto v = runBlocks (p, 30, kBlock, kRate, false, true);
+            check (v.finite, "FREEZE output remains finite across blur");
+            minPeak = jmin (minPeak, v.peak);
+            maxPeak = jmax (maxPeak, v.peak);
+        }
+
+        check (maxPeak < kCeiling, "FREEZE stays bounded at all blur settings");
+        check (minPeak > 0.001f, "FREEZE does not collapse to silence after a valid capture");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("SCAR master texture is bounded and automatable");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        p.resetAllToDefaults();
+
+        auto* on    = p.apvts.getParameter (vsx::id::scarOn);
+        auto* drive = p.apvts.getParameter (vsx::id::scarDrive);
+        auto* mix   = p.apvts.getParameter (vsx::id::scarMix);
+        check (on != nullptr && drive != nullptr && mix != nullptr,
+               "SCAR exposes on, drive and mix parameters");
+        check (on != nullptr && on->getValue() < 0.5f, "SCAR is off by default");
+
+        if (on != nullptr) on->setValueNotifyingHost (1.f);
+
+        float worst = 0.f;
+        bool finite = true;
+        for (float d : { 0.f, 0.25f, 0.5f, 0.75f, 1.f })
+            for (float m : { 0.f, 0.5f, 1.f })
+            {
+                if (drive != nullptr) drive->setValueNotifyingHost (d);
+                if (mix != nullptr) mix->setValueNotifyingHost (m);
+                const auto v = runBlocks (p, 30, kBlock, kRate, true);
+                finite = finite && v.finite;
+                worst = jmax (worst, v.peak);
+            }
+
+        check (finite, "SCAR never produces NaN/Inf");
+        check (worst < ceilingFor (p), "SCAR remains bounded (worst peak "
+                                       + String (worst, 2) + ")");
+
+        if (on != nullptr) on->setValueNotifyingHost (0.f);
+        const auto v = runBlocks (p, 12, kBlock, kRate, true);
+        check (v.finite, "switching SCAR off leaves the main signal finite");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Specimen export supports every advertised WAV quality");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        runBlocks (p, 80, kBlock, kRate, true);
+
+        for (int bits : { 16, 24, 32 })
+        {
+            auto wav = File::getSpecialLocation (File::tempDirectory)
+                         .getChildFile ("vivisect_export_" + String (bits) + ".wav");
+            wav.deleteFile();
+
+            double seconds = 0.0;
+            check (p.exportSpecimenToWav (wav, bits, &seconds),
+                   String ("export writes ") + String (bits) + "-bit wav");
+            check (seconds > 0.0, "export reports a positive duration");
+
+            WavAudioFormat fmt;
+            std::unique_ptr<AudioFormatReader> reader (fmt.createReaderFor (wav.createInputStream().release(), true));
+            check (reader != nullptr, "exported wav opens again");
+            if (reader != nullptr)
+            {
+                check ((int) reader->bitsPerSample == bits,
+                       "exported wav reports the selected bit depth");
+                check (reader->lengthInSamples > 0, "exported wav contains samples");
+            }
+            wav.deleteFile();
+        }
+
+        auto invalid = File::getSpecialLocation (File::tempDirectory)
+                         .getChildFile ("vivisect_export_invalid.wav");
+        invalid.deleteFile();
+        check (! p.exportSpecimenToWav (invalid, 12), "unsupported WAV bit depth is rejected");
+        check (! invalid.existsAsFile(), "rejected export does not leave a file behind");
+    }
+
+    // -----------------------------------------------------------------------
     //  The hidden effect is a real signal path, so it is held to the same bar
     //  as everything else - a secret that can blow up a mix is not a feature.
     // -----------------------------------------------------------------------

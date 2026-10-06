@@ -38,6 +38,53 @@ struct MonitorSnapshot
 };
 
 // ---------------------------------------------------------------------------
+//  SCAR — post-rack master texture. A bounded soft clipper with a small
+//  high-frequency "edge" contribution from the sample-to-sample delta.
+//  It is deliberately simple, stable and cheap enough to leave automated.
+// ---------------------------------------------------------------------------
+class Scar
+{
+public:
+    void reset() noexcept { previous.fill (0.f); }
+
+    void process (juce::AudioBuffer<float>& buf, int n, float drive, float mix) noexcept
+    {
+        mix = juce::jlimit (0.f, 1.f, mix);
+        drive = juce::jlimit (0.f, 1.f, drive);
+        if (mix <= 1.0e-4f || n <= 0)
+            return;
+
+        const float gain = 1.f + drive * 15.f;
+        const float edgeAmount = drive * 0.45f;
+        const int channels = juce::jmin (2, buf.getNumChannels());
+
+        for (int ch = 0; ch < channels; ++ch)
+        {
+            float* io = buf.getWritePointer (ch);
+            float prev = previous[(size_t) ch];
+
+            for (int i = 0; i < n; ++i)
+            {
+                const float dry = io[i];
+                const float edge = dry - prev;
+                prev = dry;
+
+                // tanh keeps the processed branch strictly bounded. The edge
+                // term gives transients a torn, papery attack instead of a
+                // generic static distortion curve.
+                const float shaped = std::tanh (dry * gain + edge * edgeAmount * gain);
+                io[i] = dry * (1.f - mix) + shaped * mix;
+            }
+
+            previous[(size_t) ch] = prev;
+        }
+    }
+
+private:
+    std::array<float, 2> previous { 0.f, 0.f };
+};
+
+// ---------------------------------------------------------------------------
 //  FLATLINE — the hidden effect. A tuned feedback comb: the note a monitor
 //  makes when the specimen stops. Feedback is clamped below unity and the
 //  loop is damped, so it rings rather than runs away.
@@ -405,6 +452,10 @@ protected:
 
 std::unique_ptr<Surgeon> makeSurgeon (int surgeonIndex);
 
+// Build a maximally-even Euclidean pulse pattern (a rotation of Bjorklund's
+// E(pulses, steps)). Exposed for the regression harness and Reorder.
+int buildEuclideanPattern (int steps, int pulses, std::array<int, 64>& pattern) noexcept;
+
 // ---------------------------------------------------------------------------
 //  Rack : runs the 6 surgeons, sums, handles reinject / feedback routing
 // ---------------------------------------------------------------------------
@@ -479,9 +530,10 @@ public:
 
             for (int s = 0; s < kNumSurgeons; ++s)
             {
-                if (! on[s]) continue;
-                if (activity[s] > 0.5f && rng.nextFloat() > chaos) continue; // busy
-                float pr = 0.55f * triggerRate * prob[s] * base[s];
+                const auto si = (size_t) s;
+                if (! on[si]) continue;
+                if (activity[si] > 0.5f && rng.nextFloat() > chaos) continue; // busy
+                float pr = 0.55f * triggerRate * prob[si] * base[si];
                 pr *= (1.f - cf.skipProb);
                 if (rng.nextFloat() >= pr) continue;
 
@@ -492,7 +544,7 @@ public:
                 ctx.sourceSelect = sourceSelect; ctx.morph = morph;
                 ctx.nowPos = spec.writePos();
 
-                const i64 minAbs = ctx.nowPos - spec.capacitySamples() + 8;
+                const i64 minAbs = std::max<i64> (0, ctx.nowPos - spec.capacitySamples() + 8);
                 double srcPos = (double) ctx.nowPos - (1.0 + rng.nextFloat() * 3.0) * mc.samplesPerBeat;
                 if (rng.nextFloat() >= cf.gridBypass)
                     srcPos = snapToGrid (srcPos, mc.gridIndex, mc.samplesPerBeat, mc.pull, mc.swing);
@@ -511,11 +563,15 @@ public:
                 if (rng.nextFloat() < cf.wrongSlice)
                     srcPos = (double) ctx.nowPos - rng.nextFloat() * spec.capacitySamples() * 0.9;
 
-                double len = step * (0.5 + p1[s] * 3.5);
+                double len = step * (0.5 + p1[si] * 3.5);
                 len *= 1.0 + (rng.nextFloat() * 2.f - 1.f) * cf.lengthJitter * 0.8;
-                len  = juce::jlimit (0.002 * sampleRate, 2.0 * sampleRate, len);
+                const double minLen = 0.002 * sampleRate;
+                const double available = juce::jmax (minLen, (double) ctx.nowPos - (double) minAbs - 4.0);
+                len = juce::jlimit (minLen, juce::jmin (2.0 * sampleRate, available), len);
 
-                srcPos = juce::jlimit ((double) minAbs, (double) ctx.nowPos - len - 4.0, srcPos);
+                srcPos = juce::jlimit ((double) minAbs,
+                                      juce::jmax ((double) minAbs, (double) ctx.nowPos - len - 4.0),
+                                      srcPos);
 
                 ctx.sourcePos = srcPos;
                 ctx.lengthSamples = len;
@@ -565,6 +621,9 @@ private:
     float  env = 0.f;
     float  macro[2]    { 0.f, 0.f };
     float  walk = 0.f;
+    float  walkVelocity = 0.f;
+    int    walkSamples = 0;
+    int    walkTickSamples = 882;
     juce::Random rng { 0x1a2b3c };
     Slot   slot[kNumModSlots];
 };

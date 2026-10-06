@@ -50,7 +50,7 @@ private:
     void showMainMenu();
     void doSaveAs();
     void doOpen();
-    void doExportSpecimen();
+    void doExportSpecimen (int bitDepth);
     void showOverlay (juce::Component* which);
     void showAudioMidiSettings();
 
@@ -102,7 +102,8 @@ private:
                    *kInTrim = nullptr, *kOutTrim = nullptr;
     vsx::VsxComboBox *cGrid = nullptr, *cSource = nullptr, *cScMode = nullptr,
                      *cL1s = nullptr, *cL2s = nullptr, *cBuffer = nullptr;
-    vsx::VsxButton *bMidi = nullptr, *bPanic = nullptr, *bDecay = nullptr;
+    vsx::VsxButton *bMidi = nullptr, *bPanic = nullptr, *bDecay = nullptr, *bScar = nullptr;
+    vsx::VsxSlider *kScarDrive = nullptr, *kScarMix = nullptr;
     vsx::VsxComboBox *mmSrc[vsx::kNumModSlots] {}, *mmDst[vsx::kNumModSlots] {};
     vsx::VsxSlider   *mmDepth[vsx::kNumModSlots] {};
 
