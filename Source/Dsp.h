@@ -452,6 +452,10 @@ protected:
 
 std::unique_ptr<Surgeon> makeSurgeon (int surgeonIndex);
 
+// Build a maximally-even Euclidean pulse pattern (a rotation of Bjorklund's
+// E(pulses, steps)). Exposed for the regression harness and Reorder.
+int buildEuclideanPattern (int steps, int pulses, std::array<int, 64>& pattern) noexcept;
+
 // ---------------------------------------------------------------------------
 //  Rack : runs the 6 surgeons, sums, handles reinject / feedback routing
 // ---------------------------------------------------------------------------
@@ -612,6 +616,8 @@ private:
     float  env = 0.f;
     float  macro[2]    { 0.f, 0.f };
     float  walk = 0.f;
+    float  walkVelocity = 0.f;
+    double walkAccumulator = 0.0;
     juce::Random rng { 0x1a2b3c };
     Slot   slot[kNumModSlots];
 };
