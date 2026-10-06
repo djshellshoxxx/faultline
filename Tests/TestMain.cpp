@@ -726,6 +726,80 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    beginCase ("SCAR master texture is bounded and automatable");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        p.resetAllToDefaults();
+
+        auto* on    = p.apvts.getParameter (vsx::id::scarOn);
+        auto* drive = p.apvts.getParameter (vsx::id::scarDrive);
+        auto* mix   = p.apvts.getParameter (vsx::id::scarMix);
+        check (on != nullptr && drive != nullptr && mix != nullptr,
+               "SCAR exposes on, drive and mix parameters");
+        check (on != nullptr && on->getValue() < 0.5f, "SCAR is off by default");
+
+        if (on != nullptr) on->setValueNotifyingHost (1.f);
+
+        float worst = 0.f;
+        bool finite = true;
+        for (float d : { 0.f, 0.25f, 0.5f, 0.75f, 1.f })
+            for (float m : { 0.f, 0.5f, 1.f })
+            {
+                if (drive != nullptr) drive->setValueNotifyingHost (d);
+                if (mix != nullptr) mix->setValueNotifyingHost (m);
+                const auto v = runBlocks (p, 30, kBlock, kRate, true);
+                finite = finite && v.finite;
+                worst = jmax (worst, v.peak);
+            }
+
+        check (finite, "SCAR never produces NaN/Inf");
+        check (worst < ceilingFor (p), "SCAR remains bounded (worst peak "
+                                       + String (worst, 2) + ")");
+
+        if (on != nullptr) on->setValueNotifyingHost (0.f);
+        const auto v = runBlocks (p, 12, kBlock, kRate, true);
+        check (v.finite, "switching SCAR off leaves the main signal finite");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Specimen export supports every advertised WAV quality");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        runBlocks (p, 80, kBlock, kRate, true);
+
+        for (int bits : { 16, 24, 32 })
+        {
+            auto wav = File::getSpecialLocation (File::tempDirectory)
+                         .getChildFile ("vivisect_export_" + String (bits) + ".wav");
+            wav.deleteFile();
+
+            double seconds = 0.0;
+            check (p.exportSpecimenToWav (wav, bits, &seconds),
+                   String ("export writes ") + String (bits) + "-bit wav");
+            check (seconds > 0.0, "export reports a positive duration");
+
+            WavAudioFormat fmt;
+            std::unique_ptr<AudioFormatReader> reader (fmt.createReaderFor (wav.createInputStream().release(), true));
+            check (reader != nullptr, "exported wav opens again");
+            if (reader != nullptr)
+            {
+                check ((int) reader->bitsPerSample == bits,
+                       "exported wav reports the selected bit depth");
+                check (reader->lengthInSamples > 0, "exported wav contains samples");
+            }
+            wav.deleteFile();
+        }
+
+        auto invalid = File::getSpecialLocation (File::tempDirectory)
+                         .getChildFile ("vivisect_export_invalid.wav");
+        invalid.deleteFile();
+        check (! p.exportSpecimenToWav (invalid, 12), "unsupported WAV bit depth is rejected");
+        check (! invalid.existsAsFile(), "rejected export does not leave a file behind");
+    }
+
+    // -----------------------------------------------------------------------
     //  The hidden effect is a real signal path, so it is held to the same bar
     //  as everything else - a secret that can blow up a mix is not a feature.
     // -----------------------------------------------------------------------
