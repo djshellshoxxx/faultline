@@ -20,6 +20,7 @@ public:
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout&) const override;
+    using juce::AudioProcessor::processBlock;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -51,7 +52,10 @@ public:
     juce::File crashLogFile;
 
     void buildMonitorSnapshot (vsx::MonitorSnapshot&);
-    float surgeonActivity (int i) const { return surgAct[juce::jlimit (0, vsx::kNumSurgeons - 1, i)].load(); }
+    float surgeonActivity (int i) const
+    {
+        return surgAct[(size_t) juce::jlimit (0, vsx::kNumSurgeons - 1, i)].load();
+    }
     float buildPulse() const { return pulseSmooth.load(); }
     float outputPeak (int ch) const { return outPeak[(size_t) juce::jlimit (0, 1, ch)].load(); }
 
