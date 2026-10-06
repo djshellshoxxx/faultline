@@ -820,16 +820,15 @@ private:
             freq[(size_t) (2 * k + 1)] = mag[(size_t) k] * std::sin (runPhase[(size_t) k]);
         }
         fft.performRealOnlyInverseTransform (freq.data());
-        // JUCE's real inverse is unnormalised, so divide by N. Instead of
-        // assuming a fixed 4-hop Hann overlap gain, accumulate the actual
-        // squared-window weight and divide by it when the sample is emitted.
-        // This keeps FREEZE level stable at startup, steady state and tail.
-        const float scale = 1.0f / (float) N;
+        // JUCE's real inverse FFT is already normalised. The analysis frame
+        // has one Hann window applied; applying the synthesis Hann here gives
+        // x*w^2. Accumulating the same w^2 weights and dividing at emission
+        // reconstructs a stable level without a fixed overlap-gain guess.
         for (int i = 0; i < N; ++i)
         {
             const auto idx = (size_t) ((at + i) % RING);
             const float w = winTab[(size_t) i];
-            ola[idx] += freq[(size_t) i] * w * scale;
+            ola[idx] += freq[(size_t) i] * w;
             olaNorm[idx] += w * w;
         }
     }
