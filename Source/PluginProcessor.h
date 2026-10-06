@@ -111,9 +111,16 @@ public:
     // cache. Used when the plugin is misbehaving and needs a clean slate.
     void hardResetAllSettings();
 
-    // -- reset / randomise --------------------------------------------------
+    // -- reset / randomise / mutate -----------------------------------------
     void resetAllToDefaults();
     void randomizeAll();
+    void mutateCurrent();
+
+    // Exploration locks protect creative anchors from RANDOM / MUTATE.
+    void setParameterLocked (const juce::String& paramID, bool locked);
+    bool isParameterLocked (const juce::String& paramID) const;
+    void clearParameterLocks();
+    int  lockedParameterCount() const { return parameterLocks.size(); }
 
     // -- A/B compare --------------------------------------------------------
     void selectABSlot (int slot);
@@ -142,7 +149,14 @@ private:
 
     juce::ValueTree settingsTree();
     void writeMidiMapToState();
-    void syncFromStateTree();                // rebuild cc map + cached settings
+    void writeParameterLocksToState();
+    void syncFromStateTree();
+
+    // Sound snapshots deliberately exclude VSX_SETTINGS. Presets, A/B and
+    // history are sonic state; MIDI maps, tooltips and locks are global user
+    // settings and must not change when auditioning sound states.
+    juce::ValueTree soundStateSnapshot() const;
+    void restoreSoundState (const juce::ValueTree&);                // rebuild cc map + cached settings
     void seedDefaultMidiMap();
     int  paramIndexFor (const juce::String& paramID) const;
 
@@ -185,6 +199,7 @@ private:
     int abSlot = 0;
 
     juce::File lastPresetFile;
+    juce::StringArray parameterLocks;
     juce::Random rng { (juce::uint32) juce::Time::currentTimeMillis() };
     bool randomisedOnce = false;
 
