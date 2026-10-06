@@ -395,7 +395,7 @@ void VivisectEditor::doSaveAs()
     chooser = std::make_unique<juce::FileChooser> ("Save preset", dir, "*.vsxpreset");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                             | juce::FileBrowserComponent::warnAboutOverwriting,
-                          [this, bitDepth] (const juce::FileChooser& fc)
+                          [this] (const juce::FileChooser& fc)
                           {
                               const auto f = fc.getResult();
                               if (f == juce::File()) return;
@@ -421,7 +421,7 @@ void VivisectEditor::doExportSpecimen (int bitDepth)
     chooser = std::make_unique<juce::FileChooser> ("Export specimen buffer", dir, "*.wav");
     chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                             | juce::FileBrowserComponent::warnAboutOverwriting,
-                          [this] (const juce::FileChooser& fc)
+                          [this, bitDepth] (const juce::FileChooser& fc)
                           {
                               const auto f = fc.getResult();
                               if (f == juce::File()) return;
