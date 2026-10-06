@@ -544,7 +544,7 @@ public:
                 ctx.sourceSelect = sourceSelect; ctx.morph = morph;
                 ctx.nowPos = spec.writePos();
 
-                const i64 minAbs = juce::jmax<i64> (0, ctx.nowPos - spec.capacitySamples() + 8);
+                const i64 minAbs = std::max<i64> (0, ctx.nowPos - spec.capacitySamples() + 8);
                 double srcPos = (double) ctx.nowPos - (1.0 + rng.nextFloat() * 3.0) * mc.samplesPerBeat;
                 if (rng.nextFloat() >= cf.gridBypass)
                     srcPos = snapToGrid (srcPos, mc.gridIndex, mc.samplesPerBeat, mc.pull, mc.swing);
