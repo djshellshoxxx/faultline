@@ -142,7 +142,9 @@ public:
                 // fractional read
                 float readPos = (float) writeIdx - dly;
                 while (readPos < 0.f) readPos += (float) cap;
-                const int i0 = (int) readPos;
+                // readPos can round up to exactly cap in float.
+                int i0 = (int) readPos;
+                if (i0 >= cap) { i0 -= cap; readPos -= (float) cap; }
                 const int i1 = (i0 + 1) % cap;
                 const float fr = readPos - (float) i0;
                 const float delayed = line[(size_t) i0] + (line[(size_t) i1] - line[(size_t) i0]) * fr;

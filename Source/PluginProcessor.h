@@ -180,6 +180,9 @@ private:
     std::map<juce::String, float> factoryPreset (int index) const;
 
     juce::AudioBuffer<float> dryBuf, wetBuf, workBuf;
+    juce::MidiBuffer emptyMidi;
+    int preparedBlock = 0;
+    void processChunk (juce::AudioBuffer<float>&, juce::MidiBuffer&);
     juce::AudioFormatManager formatManager;
 
     double sampleRate = 44100.0;
