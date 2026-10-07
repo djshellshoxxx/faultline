@@ -1424,6 +1424,80 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    beginCase ("Blocks larger than prepareToPlay promised are split, not overrun");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, 256);
+        p.randomizeAll();
+        const auto v = runBlocks (p, 40, 4096, kRate, true);
+        check (v.finite, "oversized blocks produce finite output");
+        check (v.peak <= ceilingFor (p), "oversized blocks stay under the ceiling");
+        const auto w = runBlocks (p, 40, 37, kRate, true);
+        check (w.finite, "small blocks after oversized ones stay finite");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Blocks smaller than prepareToPlay promised stay bounded");
+    {
+        for (int sz : { 1, 7, 16, 33, 100 })
+        {
+            VivisectProcessor p;
+            p.prepareToPlay (kRate, 512);
+            for (int s = 0; s < vsx::kNumSurgeons; ++s)
+                if (auto* par = p.apvts.getParameter (vsx::sid (s, "on")))
+                    par->setValueNotifyingHost (1.f);
+            const auto v = runBlocks (p, 48000 / sz, sz, kRate, true);
+            check (v.finite && v.peak <= ceilingFor (p),
+                   "prepared 512, blocks of " + String (sz) + " (peak " + String (v.peak, 2) + ")");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("A NaN/Inf input sample does not poison later output");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        p.randomizeAll();
+        runBlocks (p, 20, kBlock, kRate);
+        AudioBuffer<float> bad (2, kBlock);
+        fillTestSignal (bad, 0, kRate);
+        bad.setSample (0, 10, std::numeric_limits<float>::quiet_NaN());
+        bad.setSample (1, 20, std::numeric_limits<float>::infinity());
+        MidiBuffer none;
+        p.processBlock (bad, none);
+        check (inspect (bad).finite, "the block containing NaN/Inf comes out finite");
+        const auto v = runBlocks (p, 200, kBlock, kRate, true);
+        check (v.finite, "output stays finite after a NaN/Inf input");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Repeat RANDOM never touches a locked parameter, even transiently");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        auto* par = p.apvts.getParameter ("st_mix");
+        check (par != nullptr, "st_mix exists");
+        if (par != nullptr)
+        {
+            par->setValueNotifyingHost (0.123f);
+            p.setParameterLocked ("st_mix", true);
+
+            struct Counter : AudioProcessorParameter::Listener
+            {
+                int changes = 0;
+                void parameterValueChanged (int, float) override { ++changes; }
+                void parameterGestureChanged (int, bool) override {}
+            } counter;
+            par->addListener (&counter);
+            for (int i = 0; i < 4; ++i) p.randomizeAll();
+            par->removeListener (&counter);
+
+            check (counter.changes == 0, "no host notification for a locked parameter");
+            check (std::abs (par->getValue() - 0.123f) < 1.0e-6f, "locked value is exact");
+        }
+    }
+
+    // -----------------------------------------------------------------------
     std::printf ("\n=====================\n%d checks, %d failed\n", checksRun, checksFailed);
     return checksFailed == 0 ? 0 : 1;
 }

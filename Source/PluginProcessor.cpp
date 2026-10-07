@@ -56,6 +56,8 @@ bool VivisectProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
 
 void VivisectProcessor::prepareToPlay (double sr, int block)
 {
+    block = juce::jmax (1, block);
+    preparedBlock = block;
     scar.reset();
     scarWasOn = false;
     flatline.prepare (sr, block);
@@ -123,6 +125,28 @@ void VivisectProcessor::triggerSurgeonManual (int i)
 
 void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
+    // Hosts may send more samples than prepareToPlay promised (offline render,
+    // variable-size hosts). Every internal buffer is sized to the prepared
+    // block, so split oversized blocks instead of overrunning them. MIDI is
+    // handled per block (event positions are not used), so it goes to the
+    // first chunk.
+    const int total = buffer.getNumSamples();
+    if (preparedBlock > 0 && total > preparedBlock)
+    {
+        for (int off = 0; off < total; off += preparedBlock)
+        {
+            const int len = juce::jmin (preparedBlock, total - off);
+            juce::AudioBuffer<float> chunk (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), off, len);
+            processChunk (chunk, off == 0 ? midi : emptyMidi);
+            emptyMidi.clear();
+        }
+        return;
+    }
+    processChunk (buffer, midi);
+}
+
+void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
     juce::ScopedNoDenormals _;
     auto main = getBusBuffer (buffer, true, 0);
     const int n = main.getNumSamples();
@@ -139,7 +163,16 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     workBuf.copyFrom (0, 0, main, 0, 0, n);
     workBuf.copyFrom (1, 0, main, mainCh > 1 ? 1 : 0, 0, n);
     workBuf.applyGain (juce::Decibels::decibelsToGain (pv (id::inputTrim)));
-    dryBuf.makeCopyOf (workBuf);
+    // One NaN/Inf from upstream would otherwise live forever in the specimen
+    // ring, the reverb tails and the envelope follower.
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        auto* d = workBuf.getWritePointer (ch);
+        for (int i = 0; i < n; ++i)
+            if (! std::isfinite (d[i])) d[i] = 0.f;
+    }
+    dryBuf.copyFrom (0, 0, workBuf, 0, 0, n);
+    dryBuf.copyFrom (1, 0, workBuf, 1, 0, n);
 
     // ---- MIDI ---------------------------------------------------------------
     for (const auto meta : midi)
@@ -281,9 +314,12 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     }
 
     // ---- write to specimen + analyse --------------------------------
+    // workBuf is sized for the prepared block; hosts may send fewer samples.
+    // View exactly this block's n samples (no allocation: external data).
+    const juce::AudioBuffer<float> inBlock (workBuf.getArrayOfWritePointers(), 2, n);
     const i64 before = specimen.writePos();
-    specimen.push (workBuf);
-    analysis.transients.process (workBuf, before);
+    specimen.push (inBlock);
+    analysis.transients.process (inBlock, before);
     analysis.spectral.process (specimen, n);
 
     // ---- schedule --------------------------------------------------
@@ -1274,11 +1310,12 @@ void VivisectProcessor::randomizeAll()
         if (auto* p = apvts.getParameter (id::mutationAmount))
             preserved[id::mutationAmount] = p->getValue();
 
-        resetAllToDefaults();
-
-        for (const auto& kv : preserved)
-            if (auto* p = apvts.getParameter (kv.first))
-                p->setValueNotifyingHost (kv.second);
+        // Reset only what is not preserved: locked parameters must never be
+        // touched (no transient default value reaching the host or DSP).
+        for (auto* p : getParameters())
+            if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
+                if (preserved.find (rp->paramID) == preserved.end())
+                    rp->setValueNotifyingHost (rp->getDefaultValue());
     }
     randomisedOnce = true;
 

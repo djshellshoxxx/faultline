@@ -347,7 +347,7 @@ VivisectView::VivisectView (VivisectProcessor& p)
     startTimerHz (8);
 }
 
-VivisectView::~VivisectView() { setLookAndFeel (nullptr); }
+VivisectView::~VivisectView() { vsx::dismissValueEntry(); setLookAndFeel (nullptr); }
 
 // ===========================================================================
 void VivisectView::beginMidiLearnFor (const juce::String& paramID)
