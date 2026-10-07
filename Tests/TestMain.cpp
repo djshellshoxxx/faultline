@@ -154,7 +154,6 @@ int main()
 {
     // Unbuffered, so a CI log keeps everything up to an abnormal exit.
     std::setvbuf (stdout, nullptr, _IONBF, 0);
-    std::printf ("starting\n");
     ScopedJuceInitialiser_GUI juceInit;
     std::printf ("VIVISECT test harness\n=====================\n");
 

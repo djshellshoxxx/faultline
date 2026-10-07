@@ -59,11 +59,10 @@ jobs:
         run: |
           $p = Start-Process -FilePath "build\Release\VivisectTests.exe" -NoNewWindow -Wait -PassThru `
                  -RedirectStandardOutput tests-out.log -RedirectStandardError tests-err.log
-          Get-Content tests-out.log -Tail 60
+          Get-Content tests-out.log -Tail 40
           Get-Content tests-err.log -Tail 20
+          # Hex makes Windows status codes readable (0xC00000FD = stack overflow).
           "harness exit code: {0} (0x{0:X8})" -f $p.ExitCode
-          Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 3 -ErrorAction SilentlyContinue |
-            Format-List TimeCreated, Message
           exit $p.ExitCode
 
       - name: Run test harness (Linux)

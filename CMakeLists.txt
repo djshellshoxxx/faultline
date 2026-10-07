@@ -133,8 +133,11 @@ if(VIVISECT_BUILD_TESTS)
     target_compile_definitions(VivisectTests PRIVATE
         JUCE_STANDALONE_APPLICATION=1)
 
-    # A console program, so its report reaches the terminal / CI log.
+    # A console program, so its report reaches the terminal / CI log. main()
+    # holds dozens of ~27 KB processors in separate test blocks; GCC/Clang
+    # reuse those stack slots but MSVC reserves them all up front, which
+    # overflows Windows' 1 MB default stack before the first line runs.
     if(MSVC)
-        target_link_options(VivisectTests PRIVATE /SUBSYSTEM:CONSOLE)
+        target_link_options(VivisectTests PRIVATE /SUBSYSTEM:CONSOLE /STACK:16777216)
     endif()
 endif()
