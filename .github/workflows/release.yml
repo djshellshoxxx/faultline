@@ -1,0 +1,106 @@
+name: Release builds
+
+# Builds VST3, CLAP and Standalone for Windows and Linux (plus LV2 on Linux),
+# runs the headless test harness against the exact shipping code, and uploads
+# zipped packages as workflow artifacts. Pushing a tag such as v0.9.3 also
+# publishes those zips as a GitHub Release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+          - os: ubuntu-22.04
+            name: linux-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install JUCE build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libasound2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libgl1-mesa-dev
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        # No -G: CMake picks the newest Visual Studio on the runner image.
+        run: cmake -S . -B build -A x64
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Run test harness (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "build\Release\VivisectTests.exe" -NoNewWindow -Wait -PassThru `
+                 -RedirectStandardOutput tests-out.log -RedirectStandardError tests-err.log
+          Get-Content tests-out.log -Tail 40
+          Get-Content tests-err.log -Tail 20
+          # Hex makes Windows status codes readable (0xC00000FD = stack overflow).
+          "harness exit code: {0} (0x{0:X8})" -f $p.ExitCode
+          exit $p.ExitCode
+
+      - name: Run test harness (Linux)
+        if: runner.os == 'Linux'
+        run: ./build/VivisectTests
+
+      - name: Package
+        shell: bash
+        run: |
+          VER=$(grep -oP 'project\(Vivisect VERSION \K[0-9.]+' CMakeLists.txt)
+          ART=build/Vivisect_artefacts/Release
+          OUT="Vivisect-${VER}-${{ matrix.name }}"
+          mkdir -p "dist/$OUT"
+          cp -r "$ART/VST3/Vivisect.vst3" "dist/$OUT/"
+          cp -r "$ART/CLAP/Vivisect.clap" "dist/$OUT/"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$ART/Standalone/Vivisect.exe" "dist/$OUT/"
+          else
+            cp "$ART/Standalone/Vivisect" "dist/$OUT/"
+            cp -r "$ART/LV2/Vivisect.lv2" "dist/$OUT/"
+          fi
+          cp LICENSE COPYRIGHT-TRADEMARK.md INSTALL.md "dist/$OUT/"
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z a -tzip "$OUT.zip" "$OUT" > /dev/null
+          else
+            zip -qr "$OUT.zip" "$OUT"
+          fi
+          echo "PKG=dist/$OUT.zip" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Vivisect-${{ matrix.name }}
+          path: ${{ env.PKG }}
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.PKG }}
+          generate_release_notes: true

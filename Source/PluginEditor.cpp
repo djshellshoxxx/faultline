@@ -15,11 +15,12 @@ namespace
     constexpr int kW          = 1180;
     constexpr int kHeaderH    = metric::header;    // 32
     constexpr int kMonitorH   = 160;
-    constexpr int kMasterH    = 104;
+    constexpr int kMasterH    = 120;
     constexpr int kIoH        = 88;
     constexpr int kStripH     = 78;
-    constexpr int kBtnRowH    = 40;
+    constexpr int kBtnRowH    = 56;      // tall enough for the small knobs' captions
     constexpr int kModHeadH   = 76;
+    constexpr int kSectionH   = 20;      // band for a section header + its hint text
     constexpr int kModRowH    = 26;
     constexpr int kHistoryH   = 24;
     constexpr int kFooterH    = 16;
@@ -28,13 +29,13 @@ namespace
 
     constexpr int kH = kHeaderH + kG + kMonitorH + kG + kMasterH + kG + kIoH + kG
                      + kNumSurgeons * kStripH + kG + kBtnRowH + kG
-                     + kModHeadH + kNumModSlots * kModRowH + kG + kHistoryH + kG + kFooterH;
+                     + kSectionH + kModHeadH + kNumModSlots * kModRowH + kG + kHistoryH + kG + kFooterH;
 }
 
 // ===========================================================================
 //  Control factories
 // ===========================================================================
-VsxSlider& VivisectEditor::addKnob (const char* pid, const juce::String& caption,
+VsxSlider& VivisectView::addKnob (const char* pid, const juce::String& caption,
                                     const juce::String& tip, VsxSlider::Size size)
 {
     auto* s = new VsxSlider (*this, pid, caption, size);
@@ -45,7 +46,7 @@ VsxSlider& VivisectEditor::addKnob (const char* pid, const juce::String& caption
     return *s;
 }
 
-VsxComboBox& VivisectEditor::addCombo (const char* pid, const juce::StringArray& items,
+VsxComboBox& VivisectView::addCombo (const char* pid, const juce::StringArray& items,
                                        const juce::String& caption, const juce::String& tip)
 {
     auto* c = new VsxComboBox (*this, pid);
@@ -58,7 +59,7 @@ VsxComboBox& VivisectEditor::addCombo (const char* pid, const juce::StringArray&
     return *c;
 }
 
-VsxButton& VivisectEditor::addParamButton (const char* pid, const juce::String& text, const juce::String& tip)
+VsxButton& VivisectView::addParamButton (const char* pid, const juce::String& text, const juce::String& tip)
 {
     auto* b = new VsxButton (text, this, pid);
     b->setClickingTogglesState (true);
@@ -70,8 +71,8 @@ VsxButton& VivisectEditor::addParamButton (const char* pid, const juce::String& 
 }
 
 // ===========================================================================
-VivisectEditor::VivisectEditor (VivisectProcessor& p)
-    : juce::AudioProcessorEditor (p), proc (p),
+VivisectView::VivisectView (VivisectProcessor& p)
+    : proc (p),
       led ([&p] (int ch) { return p.outputPeak (ch); }),
       stream ([&p] (vsx::TelemetryEvent* dest, int max) { return p.telemetry().drain (dest, max); },
               [&p] (int idx) { return p.describeParam (idx); }),
@@ -343,21 +344,20 @@ VivisectEditor::VivisectEditor (VivisectProcessor& p)
     tips.setTipsEnabled (proc.tooltipsEnabled());
 
     setSize (kW, kH);
-    setResizable (false, false);
     startTimerHz (8);
 }
 
-VivisectEditor::~VivisectEditor() { setLookAndFeel (nullptr); }
+VivisectView::~VivisectView() { setLookAndFeel (nullptr); }
 
 // ===========================================================================
-void VivisectEditor::beginMidiLearnFor (const juce::String& paramID)
+void VivisectView::beginMidiLearnFor (const juce::String& paramID)
 {
     proc.beginMidiLearn (paramID);
     learnTarget = paramID;
     repaint();
 }
 
-void VivisectEditor::timerCallback()
+void VivisectView::timerCallback()
 {
 
     // the audio thread clears the learn target as soon as it sees a CC
@@ -365,7 +365,7 @@ void VivisectEditor::timerCallback()
     if (t != learnTarget) { learnTarget = t; repaint(); }
 }
 
-void VivisectEditor::refreshPresetList()
+void VivisectView::refreshPresetList()
 {
     presetBox.clear (juce::dontSendNotification);
     int i = 1;
@@ -373,7 +373,7 @@ void VivisectEditor::refreshPresetList()
         presetBox.addItem (n, i++);
 }
 
-void VivisectEditor::showOverlay (juce::Component* which)
+void VivisectView::showOverlay (juce::Component* which)
 {
     help.setVisible (which == &help);
     options.setVisible (which == &options);
@@ -384,7 +384,7 @@ void VivisectEditor::showOverlay (juce::Component* which)
     if (which != nullptr) { which->setBounds (getLocalBounds()); which->toFront (true); }
 }
 
-void VivisectEditor::chooseSample (int slot)
+void VivisectView::chooseSample (int slot)
 {
     chooser = std::make_unique<juce::FileChooser> ("Load specimen into " + juce::String (slot == 0 ? "A" : "B"),
                                                    juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
@@ -392,11 +392,26 @@ void VivisectEditor::chooseSample (int slot)
                           [this, slot] (const juce::FileChooser& fc)
                           {
                               const auto f = fc.getResult();
-                              if (f.existsAsFile()) proc.loadSampleInto (slot, f);
+                              if (f.existsAsFile()) loadSampleWithFeedback (slot, f);
                           });
 }
 
-void VivisectEditor::doSaveAs()
+void VivisectView::loadSampleWithFeedback (int slot, const juce::File& f)
+{
+    if (proc.loadSampleInto (slot, f))
+        return;
+
+    juce::AlertWindow::showAsync (
+        juce::MessageBoxOptions()
+            .withIconType (juce::MessageBoxIconType::WarningIcon)
+            .withTitle ("Could not load sample")
+            .withMessage ("Vivisect could not read:\n" + f.getFullPathName()
+                          + "\n\nUse a WAV, AIFF, FLAC, MP3 or OGG file that is not empty.")
+            .withButton ("OK"),
+        nullptr);
+}
+
+void VivisectView::doSaveAs()
 {
     auto dir = proc.getUserPresetDir();
     dir.createDirectory();
@@ -412,7 +427,7 @@ void VivisectEditor::doSaveAs()
                           });
 }
 
-void VivisectEditor::doOpen()
+void VivisectView::doOpen()
 {
     chooser = std::make_unique<juce::FileChooser> ("Open preset", proc.getUserPresetDir(), "*.vsxpreset");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
@@ -423,7 +438,7 @@ void VivisectEditor::doOpen()
                           });
 }
 
-void VivisectEditor::doExportSpecimen (int bitDepth)
+void VivisectView::doExportSpecimen (int bitDepth)
 {
     const auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory);
     chooser = std::make_unique<juce::FileChooser> ("Export specimen buffer", dir, "*.wav");
@@ -454,7 +469,7 @@ void VivisectEditor::doExportSpecimen (int bitDepth)
                           });
 }
 
-void VivisectEditor::showAudioMidiSettings()
+void VivisectView::showAudioMidiSettings()
 {
    #if defined (VSX_HAS_STANDALONE_SETTINGS)
     if (auto* holder = juce::StandalonePluginHolder::getInstance())
@@ -467,7 +482,7 @@ void VivisectEditor::showAudioMidiSettings()
 //  reveal it; the identity notch in the top-left corner is that spot. It is
 //  drawn on every build as the brand mark, so it hides in plain sight.
 // ===========================================================================
-void VivisectEditor::mouseDown (const juce::MouseEvent& e)
+void VivisectView::mouseDown (const juce::MouseEvent& e)
 {
     if (secretHotspot().contains (e.getPosition()))
     {
@@ -482,7 +497,7 @@ void VivisectEditor::mouseDown (const juce::MouseEvent& e)
 //  Drag and drop — drop any audio file to load it as a specimen. Left half of
 //  the window is slot A, right half is slot B, so a drop is aimed, not random.
 // ===========================================================================
-bool VivisectEditor::isAudioFile (const juce::String& path)
+bool VivisectView::isAudioFile (const juce::String& path)
 {
     static const juce::StringArray exts { ".wav", ".aif", ".aiff", ".flac", ".mp3", ".ogg" };
     for (const auto& e : exts)
@@ -491,12 +506,12 @@ bool VivisectEditor::isAudioFile (const juce::String& path)
     return false;
 }
 
-int VivisectEditor::dropSlotFor (juce::Point<int> p) const
+int VivisectView::dropSlotFor (juce::Point<int> p) const
 {
     return p.x < getWidth() / 2 ? 0 : 1;
 }
 
-bool VivisectEditor::isInterestedInFileDrag (const juce::StringArray& files)
+bool VivisectView::isInterestedInFileDrag (const juce::StringArray& files)
 {
     for (const auto& f : files)
         if (isAudioFile (f))
@@ -504,25 +519,25 @@ bool VivisectEditor::isInterestedInFileDrag (const juce::StringArray& files)
     return false;
 }
 
-void VivisectEditor::fileDragEnter (const juce::StringArray&, int x, int y)
+void VivisectView::fileDragEnter (const juce::StringArray&, int x, int y)
 {
     dragSlot = dropSlotFor ({ x, y });
     repaint();
 }
 
-void VivisectEditor::fileDragMove (const juce::StringArray&, int x, int y)
+void VivisectView::fileDragMove (const juce::StringArray&, int x, int y)
 {
     const int s = dropSlotFor ({ x, y });
     if (s != dragSlot) { dragSlot = s; repaint(); }
 }
 
-void VivisectEditor::fileDragExit (const juce::StringArray&)
+void VivisectView::fileDragExit (const juce::StringArray&)
 {
     dragSlot = -1;
     repaint();
 }
 
-void VivisectEditor::filesDropped (const juce::StringArray& files, int x, int y)
+void VivisectView::filesDropped (const juce::StringArray& files, int x, int y)
 {
     const int slot = dropSlotFor ({ x, y });
     dragSlot = -1;
@@ -537,15 +552,15 @@ void VivisectEditor::filesDropped (const juce::StringArray& files, int x, int y)
 
         const juce::File file (f);
         if (file.existsAsFile())
-            proc.loadSampleInto (slot, file);
+            loadSampleWithFeedback (slot, file);
         return;
     }
 }
 
-void VivisectEditor::showMainMenu()
+void VivisectView::showMainMenu()
 {
     juce::PopupMenu m;
-    m.addItem (1, "Save", proc.getLastPresetFile().existsAsFile());
+    m.addItem (1, "Save");
     m.addItem (2, "Save As...");
     m.addItem (3, "Open...");
     m.addSeparator();
@@ -571,7 +586,10 @@ void VivisectEditor::showMainMenu()
                      {
                          switch (choice)
                          {
-                             case 1:  proc.savePresetToFile (proc.getLastPresetFile()); refreshPresetList(); break;
+                             case 1:  // No file yet: Save behaves like Save As rather than doing nothing.
+                                      if (proc.getLastPresetFile() == juce::File()) doSaveAs();
+                                      else { proc.savePresetToFile (proc.getLastPresetFile()); refreshPresetList(); }
+                                      break;
                              case 2:  doSaveAs();   break;
                              case 3:  doOpen();     break;
                              case 4:  chooseSample (0); break;
@@ -592,7 +610,7 @@ void VivisectEditor::showMainMenu()
 }
 
 // ===========================================================================
-void VivisectEditor::paint (juce::Graphics& g)
+void VivisectView::paint (juce::Graphics& g)
 {
     g.fillAll (col::bg);
 
@@ -684,7 +702,7 @@ void VivisectEditor::paint (juce::Graphics& g)
 }
 
 // ===========================================================================
-void VivisectEditor::resized()
+void VivisectView::resized()
 {
     auto r = getLocalBounds();
 
@@ -720,17 +738,21 @@ void VivisectEditor::resized()
     for (auto* s : { kPull, kSwing, kDryWet, kTrig, kReinj, kAnalys, kMorph })
         place (s, 76);
 
+    // Three captioned combos. Each caption is painted 13px above its combo,
+    // so every row reserves that band rather than letting the next combo
+    // cover it. SC AMT sits beside the lower two rows.
     auto col2 = master.withTrimmedLeft (kG);
-    const int rowH = metric::buttonH - 4;
-    const int stack = rowH * 3 + kG;
-    col2 = col2.withSizeKeepingCentre (col2.getWidth(), stack);
-    cGrid->setBounds   (col2.removeFromTop (rowH));
-    col2.removeFromTop (kG / 2);
+    const int rowH = metric::buttonH - 4, capH = 14, gap = 2;
+    col2 = col2.withSizeKeepingCentre (col2.getWidth(), 3 * (capH + rowH) + 2 * gap);
+    col2.removeFromTop (capH);
+    cGrid->setBounds (col2.removeFromTop (rowH));
+    col2.removeFromTop (gap);
+    kScAmt->setBounds (col2.removeFromRight (60));
+    col2.removeFromRight (kG / 2);
+    col2.removeFromTop (capH);
     cSource->setBounds (col2.removeFromTop (rowH));
-    col2.removeFromTop (kG / 2);
-    auto scRow = col2.removeFromTop (rowH);
-    kScAmt->setBounds  (scRow.removeFromRight (56).withSizeKeepingCentre (56, kIoH - kG * 2));
-    cScMode->setBounds (scRow.withTrimmedRight (kG / 2));
+    col2.removeFromTop (gap + capH);
+    cScMode->setBounds (col2.removeFromTop (rowH));
 
     // -- i/o row -------------------------------------------------------------
     r.removeFromTop (kG);
@@ -755,7 +777,11 @@ void VivisectEditor::resized()
     // -- action buttons ------------------------------------------------------
     r.removeFromTop (kG);
     auto btnRow = r.removeFromTop (kBtnRowH).reduced (kPad, 0);
-    auto pb = [&] (juce::Component* c, int w) { c->setBounds (btnRow.removeFromLeft (w)); btnRow.removeFromLeft (kG); };
+    auto pb = [&] (juce::Component* c, int w)
+    {
+        c->setBounds (btnRow.removeFromLeft (w).withSizeKeepingCentre (w, metric::buttonH + 4));
+        btnRow.removeFromLeft (kG);
+    };
     pb (&randomBtn, 96);
     pb (&mutateBtn, 88);
     kMutationAmt->setBounds (btnRow.removeFromLeft (72).withSizeKeepingCentre (72, kBtnRowH));
@@ -768,10 +794,10 @@ void VivisectEditor::resized()
     kScarDrive->setBounds (btnRow.removeFromLeft (64));
     btnRow.removeFromLeft (kG / 2);
     kScarMix->setBounds (btnRow.removeFromLeft (64));
-    saveBtn.setBounds (btnRow.removeFromRight (136));
+    saveBtn.setBounds (btnRow.removeFromRight (136).withSizeKeepingCentre (136, metric::buttonH + 4));
 
     // -- modulation ----------------------------------------------------------
-    r.removeFromTop (kG);
+    r.removeFromTop (kG + kSectionH);         // header band, painted in paint()
     auto modHead = r.removeFromTop (kModHeadH - kG).reduced (kPad, 0);
     auto ph = [&] (VsxSlider* s) { s->setBounds (modHead.removeFromLeft (76)); modHead.removeFromLeft (kG / 2); };
     auto pc = [&] (VsxComboBox* c)
@@ -827,4 +853,45 @@ void VivisectEditor::resized()
     if (help.isVisible())    help.setBounds (getLocalBounds());
     if (options.isVisible()) options.setBounds (getLocalBounds());
     if (debug.isVisible())   debug.setBounds (getLocalBounds());
+}
+
+// ===========================================================================
+int VivisectView::designWidth() noexcept  { return kW; }
+int VivisectView::designHeight() noexcept { return kH; }
+
+VivisectEditor::VivisectEditor (VivisectProcessor& p)
+    : juce::AudioProcessorEditor (p), proc (p), view (p)
+{
+    addAndMakeVisible (view);
+
+    const int w = kW, h = kH;
+    float scale = proc.uiScale();                // <= 0: never chosen yet
+    if (scale <= 0.f)
+    {
+        scale = 1.f;
+        // Leave room for the host's own window chrome and the taskbar.
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+            scale = juce::jmin (1.f, (float) (d->userArea.getHeight() - 96) / (float) h);
+    }
+    scale = juce::jlimit (minScale, maxScale, scale);
+
+    setResizable (true, true);
+    setResizeLimits (juce::roundToInt (w * minScale), juce::roundToInt (h * minScale),
+                     juce::roundToInt (w * maxScale), juce::roundToInt (h * maxScale));
+    if (auto* c = getConstrainer())
+        c->setFixedAspectRatio ((double) w / (double) h);
+    setSize (juce::roundToInt (w * scale), juce::roundToInt (h * scale));
+}
+
+void VivisectEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (col::bg);
+}
+
+void VivisectEditor::resized()
+{
+    const float s = juce::jlimit (minScale, maxScale, (float) getWidth() / (float) kW);
+    view.setTransform (juce::AffineTransform::scale (s));
+    view.setBounds (0, 0, kW, kH);
+    proc.setUiScale (s);
 }

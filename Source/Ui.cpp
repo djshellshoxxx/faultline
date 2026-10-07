@@ -1069,6 +1069,9 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "              there to be glanced at, not read. It scrolls only while something\n"
         "              is actually happening, so a still feed means a still plugin, which\n"
         "              is useful in itself when you are chasing a dead signal path.\n"
+        "  WINDOW SIZE Drag the corner at the bottom right to make the whole window\n"
+        "              smaller or larger (50% to 150%). The size is saved with your\n"
+        "              session. On a small screen it opens shrunk to fit.\n"
         "\n"
         "MASTER CONTROLS\n"
         "  CHAOS         One automatable axis, order to chaos. Low: grid-locked and\n"
@@ -1185,14 +1188,22 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "            or ~/Library/Audio/Plug-Ins/VST3/ for just you.\n"
         "  Linux     Copy Vivisect.vst3 to ~/.vst3/ or /usr/lib/vst3/.\n"
         "\n"
+        "  CLAP      Copy Vivisect.clap to the CLAP folder for your system:\n"
+        "            Windows  C:\\Program Files\\Common Files\\CLAP\\\n"
+        "            macOS    /Library/Audio/Plug-Ins/CLAP/ or ~/Library/Audio/Plug-Ins/CLAP/\n"
+        "            Linux    ~/.clap/ or /usr/lib/clap/\n"
+        "  STANDALONE  Vivisect.exe (or Vivisect on Linux) runs on its own - no DAW\n"
+        "            needed. Put it anywhere, e.g. C:\\Program Files\\Vivisect\\, and\n"
+        "            pick your audio and MIDI devices under MENU > Options.\n"
+        "\n"
         "  Then rescan. Most hosts have a rescan or reset-and-rescan button in their\n"
         "  plug-in preferences; some only rescan on start-up, so restart the DAW if in\n"
         "  doubt. If it still does not show, check that your host is 64-bit and that it is\n"
         "  actually scanning the folder you copied to - many DAWs let you add extra scan\n"
         "  paths, and a custom path set years ago is the usual culprit.\n"
         "\n"
-        "  To uninstall, delete the same Vivisect.vst3 folder you copied in, and delete\n"
-        "  the standalone application. To remove your settings and presets as well, delete\n"
+        "  To uninstall, delete the Vivisect.vst3 folder and Vivisect.clap you copied in,\n"
+        "  and delete the standalone application. To remove settings and presets too, delete\n"
         "  the Vivisect folder described under PRESET FILES below. Nothing is written to\n"
         "  the registry, so there is nothing else to clean up.\n"
         "\n"
@@ -1803,7 +1814,7 @@ SecretPanel::SecretPanel (ParamHost& host)
                       "values ring for a long time but stop short of self-oscillating.");
     mix.setTooltip   ("SECRET FEATURE - FLATLINE MIX. How much of the ring is blended into "
                       "the output.");
-    closeBtn.setTooltip ("Close the hidden effect. Click the notch in the top-left corner "
+    closeBtn.setTooltip ("SECRET FEATURE - close the hidden effect. Click the notch in the top-left corner "
                          "to open it again.");
 
     addAndMakeVisible (onBtn);

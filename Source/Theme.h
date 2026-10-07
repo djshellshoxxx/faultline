@@ -61,7 +61,7 @@ namespace product
     inline constexpr const char* name    = "Vivisect";
     inline constexpr const char* vendor  = "Specimen Audio";
     inline constexpr const char* home    = "https://specimenaudio.com/vivisect";
-    inline constexpr const char* github  = "https://github.com/specimenaudio/vivisect";
+    inline constexpr const char* github  = "https://github.com/djshellshoxxx/faultline";
     inline constexpr const char* support = "support@specimenaudio.com";
 }
 

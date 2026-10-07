@@ -1,10 +1,24 @@
+#if defined (_WIN32)
+ #ifndef NOMINMAX
+  #define NOMINMAX
+ #endif
+ #ifndef WIN32_LEAN_AND_MEAN
+  #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>
+#else
+ #include <csignal>
+#endif
 #include "PluginProcessor.h"
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include "PluginEditor.h"
 #include "Theme.h"
 
 using namespace vsx;
+
+static const juce::Identifier kSamplesTag { "VSX_SAMPLES" };
 
 // ===========================================================================
 VivisectProcessor::VivisectProcessor()
@@ -17,9 +31,18 @@ VivisectProcessor::VivisectProcessor()
     formatManager.registerBasicFormats();
     for (auto& a : surgAct) a.store (0.f);
     for (auto& c : ccToParam) c.store (-1);
+    for (auto& v : pendingCCValue) v.store (-1.f);
+    for (auto& v : pendingCCParam) v.store (-1);
     seedDefaultMidiMap();
 }
-VivisectProcessor::~VivisectProcessor() { stopTimer(); }
+VivisectProcessor::~VivisectProcessor()
+{
+    stopTimer();
+    // The crash handler is process-wide and points into this binary. Leaving it
+    // installed after the host unloads the plug-in would turn the next host
+    // crash into a jump into freed code.
+    setCrashLogEnabled (false);
+}
 
 bool VivisectProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
@@ -56,7 +79,10 @@ void VivisectProcessor::prepareToPlay (double sr, int block)
     for (int i = 0; i < kHist; ++i) histRing.add ({});
     histHead = histCount = 0;
 
-    startTimerHz (2);
+    // 30 Hz: MIDI-CC parameter changes reach the host promptly; the history
+    // snapshot still runs at 2 Hz (every 15th tick).
+    timerTicks = 0;
+    startTimerHz (30);
 }
 
 // ===========================================================================
@@ -64,19 +90,32 @@ float VivisectProcessor::pvMod (const char* pid, int destEnum)
 {
     auto* p = apvts.getParameter (pid);
     if (p == nullptr) return pv (pid);
-    const float v = juce::jlimit (0.f, 1.f, p->getValue() + modMatrix.destOffset (destEnum));
+    // Start from the raw value the rest of the DSP reads, so a MIDI CC move
+    // that has not been flushed to the host yet is still heard consistently.
+    const float base = p->convertTo0to1 (pv (pid));
+    const float v = juce::jlimit (0.f, 1.f, base + modMatrix.destOffset (destEnum));
     return p->convertFrom0to1 (v);
+}
+
+double VivisectProcessor::bufferRegionSamples (double samplesPerBeat) const
+{
+    // BUFFER: 4 / 8 / 16 bars of 4/4. The scheduler clamps to the ring size.
+    const int bars = 4 << juce::jlimit (0, 2, (int) pv (id::bufferBars));
+    return bars * 4.0 * samplesPerBeat;
 }
 
 void VivisectProcessor::triggerSurgeonManual (int i)
 {
+    if (specimen.capacitySamples() < 1024)      // not prepared yet: nothing to cut
+        return;
     i = juce::jlimit (0, kNumSurgeons - 1, i);
     rack[i].setParams (pv (sidRaw (i, SP_P1)),
                        pv (sidRaw (i, SP_P2)),
                        pv (sidRaw (i, SP_P3)));
     auto c = scheduler.makeManualContext (pv (sidRaw (i, SP_P1)),
                                           (int) pv (id::sourceSel), pv (id::morph), pv (id::chaos),
-                                          60.0 / lastBpm * sampleRate, specimen, analysis);
+                                          60.0 / lastBpm * sampleRate, specimen, analysis,
+                                          bufferRegionSamples (60.0 / lastBpm * sampleRate));
     rack[i].trigger (c);
     telem.pushFire (i, (float) std::fmod (c.sourcePos, 1000.0) / 1000.f,
                     (float) (c.lengthSamples * 1000.0 / juce::jmax (1.0, sampleRate)));
@@ -132,7 +171,13 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             telem.pushCC (cc, m.getControllerValue(), pIdx);
             if (pIdx >= 0 && pIdx < getParameters().size())
             {
-                getParameters()[pIdx]->setValueNotifyingHost (v);
+                // Audible now via the raw value the DSP reads; the host is
+                // told from the message thread by the timer.
+                if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (getParameters()[pIdx]))
+                    if (auto* raw = apvts.getRawParameterValue (rp->paramID))
+                        raw->store (rp->convertFrom0to1 (v));
+                pendingCCParam[(size_t) cc].store (pIdx);
+                pendingCCValue[(size_t) cc].store (v);
                 telem.pushSimple (vsx::TelemetryEvent::Kind::paramChange, v, 0.f,
                                   juce::jmin (254, pIdx));
             }
@@ -249,6 +294,7 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     mc.pull = gPull;
     mc.swing = swing;
     mc.playing = playing;
+    mc.regionSamples = bufferRegionSamples (spb);
 
     std::array<float, kNumSurgeons> actArr {};
     for (int s = 0; s < kNumSurgeons; ++s) actArr[(size_t) s] = rack[s].activity();
@@ -275,7 +321,8 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                         triggerSurgeonManual (s);
                     else
                     {
-                        auto c = scheduler.makeManualContext (p1A[(size_t) s], 2, morph, chaos, spb, specimen, analysis);
+                        auto c = scheduler.makeManualContext (p1A[(size_t) s], 2, morph, chaos, spb, specimen, analysis,
+                                                             mc.regionSamples);
                         rack[s].trigger (c);
                     }
                 }
@@ -342,14 +389,26 @@ void VivisectProcessor::buildMonitorSnapshot (MonitorSnapshot& snap)
     const int cap = specimen.capacitySamples();
     const i64 wp = specimen.writePos();
     const double spb = 60.0 / lastBpm * sampleRate;
-    const int bars = 4 << juce::jlimit (0, 2, (int) pv (id::bufferBars));
-    const double region = juce::jlimit (1024.0, (double) cap - 8.0, bars * 4.0 * spb);
     const int COLS = MonitorSnapshot::COLS;
 
     snap.frozen = specimen.isFrozen();
     snap.chaos  = pv (id::chaos);
     snap.pulse  = pulseSmooth.load();
     for (int s = 0; s < kNumSurgeons; ++s) snap.surgAct[s] = surgAct[(size_t) s].load();
+
+    // The editor can paint before the host has ever called prepareToPlay
+    // (standalone with no audio device, or a DAW that opens the window
+    // first). Nothing is allocated yet, so show a flat line.
+    if (cap < 1024 + 8)
+    {
+        std::fill (std::begin (snap.envMin), std::end (snap.envMin), 0.f);
+        std::fill (std::begin (snap.envMax), std::end (snap.envMax), 0.f);
+        std::fill (std::begin (snap.bright), std::end (snap.bright), 0.f);
+        snap.numTransients = 0;
+        snap.numGrabs = 0;
+        return;
+    }
+    const double region = juce::jlimit (1024.0, (double) cap - 8.0, bufferRegionSamples (spb));
 
     const double base = (double) wp - region;
     for (int c = 0; c < COLS; ++c)
@@ -398,9 +457,26 @@ void VivisectProcessor::buildMonitorSnapshot (MonitorSnapshot& snap)
 }
 
 // ===========================================================================
+void VivisectProcessor::flushPendingMidiParameterChanges()
+{
+    const auto& all = getParameters();
+    for (int cc = 0; cc < 128; ++cc)
+    {
+        const float v = pendingCCValue[(size_t) cc].exchange (-1.f);
+        if (v < 0.f) continue;
+        const int idx = pendingCCParam[(size_t) cc].load();
+        if (idx >= 0 && idx < all.size())
+            all[idx]->setValueNotifyingHost (v);
+    }
+}
+
 void VivisectProcessor::timerCallback()
 {
+    flushPendingMidiParameterChanges();
     if (midiMapDirty.exchange (false)) writeMidiMapToState();
+
+    if (++timerTicks < 15) return;
+    timerTicks = 0;
 
     const auto state = soundStateSnapshot();
     juce::String s;
@@ -592,23 +668,28 @@ std::map<juce::String, float> VivisectProcessor::factoryPreset (int index) const
 }
 
 // ===========================================================================
-void VivisectProcessor::loadSampleInto (int slot, const juce::File& file)
+bool VivisectProcessor::loadSampleInto (int slot, const juce::File& file)
 {
+    if (slot < 0 || slot > 1) return false;
     std::unique_ptr<juce::AudioFormatReader> r (formatManager.createReaderFor (file));
-    if (r == nullptr) return;
+    if (r == nullptr) return false;
     const int len = (int) std::min<juce::int64> (r->lengthInSamples, (juce::int64) (sampleRate * 30.0));
-    if (len < 2) return;
+    if (len < 2) return false;
     juce::AudioBuffer<float> tmp ((int) juce::jmax (1u, r->numChannels), len);
     r->read (&tmp, 0, len, 0, true, true);
     suspendProcessing (true);
     specimen.setSample (slot, std::move (tmp), r->sampleRate);
     suspendProcessing (false);
+    sampleFiles[slot] = file;
+    return true;
 }
 void VivisectProcessor::clearSampleSlot (int slot)
 {
+    if (slot < 0 || slot > 1) return;
     suspendProcessing (true);
     specimen.clearSample (slot);
     suspendProcessing (false);
+    sampleFiles[slot] = juce::File();
 }
 
 // ===========================================================================
@@ -616,15 +697,41 @@ void VivisectProcessor::getStateInformation (juce::MemoryBlock& dest)
 {
     // Host project/session state includes both sonic parameters and global
     // VSX_SETTINGS (tooltips, MIDI mappings and exploration locks).
-    if (auto xml = apvts.copyState().createXml()) copyXmlToBinary (*xml, dest);
+    // Loaded samples are referenced by path so the session reopens with the
+    // same specimens. They ride outside apvts.state, so presets, A/B and
+    // history never carry them.
+    auto state = apvts.copyState();
+    juce::ValueTree samples (kSamplesTag);
+    for (int slot = 0; slot < 2; ++slot)
+        if (sampleFiles[slot] != juce::File())
+            samples.setProperty (slot == 0 ? "a" : "b", sampleFiles[slot].getFullPathName(), nullptr);
+    state.appendChild (samples, nullptr);
+    if (auto xml = state.createXml()) copyXmlToBinary (*xml, dest);
 }
 void VivisectProcessor::setStateInformation (const void* data, int size)
 {
     if (auto xml = getXmlFromBinary (data, size))
         if (xml->hasTagName (apvts.state.getType()))
         {
-            apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            auto state = juce::ValueTree::fromXml (*xml);
+            const auto samples = state.getChildWithName (kSamplesTag);
+            if (samples.isValid())
+                state.removeChild (samples, nullptr);
+
+            apvts.replaceState (state);
             syncFromStateTree();
+
+            for (int slot = 0; slot < 2; ++slot)
+            {
+                const auto path = samples.getProperty (slot == 0 ? "a" : "b").toString();
+                const juce::File f = juce::File::isAbsolutePath (path) ? juce::File (path) : juce::File();
+                if (f == sampleFiles[slot] && slotHasSample (slot)) continue;
+                if (f.existsAsFile()) loadSampleInto (slot, f);
+                else if (path.isEmpty() && slotHasSample (slot)) clearSampleSlot (slot);
+                // a path that no longer exists keeps the reference, so saving
+                // again does not silently lose it
+                else if (path.isNotEmpty()) sampleFiles[slot] = f;
+            }
         }
 }
 
@@ -637,6 +744,7 @@ static const juce::Identifier kSettingsTag  { "VSX_SETTINGS" };
 static const juce::Identifier kTooltipsProp { "tooltips" };
 static const juce::Identifier kMidiMapProp  { "midiMap" };
 static const juce::Identifier kLocksProp    { "randomLocks" };
+static const juce::Identifier kUiScaleProp  { "uiScale" };
 
 juce::ValueTree VivisectProcessor::settingsTree()
 {
@@ -651,6 +759,17 @@ bool VivisectProcessor::tooltipsEnabled() const
 void VivisectProcessor::setTooltipsEnabled (bool on)
 {
     settingsTree().setProperty (kTooltipsProp, on, nullptr);
+}
+
+float VivisectProcessor::uiScale() const
+{
+    const auto t = apvts.state.getChildWithName (kSettingsTag);
+    return t.isValid() ? (float) t.getProperty (kUiScaleProp, 0.f) : 0.f;
+}
+void VivisectProcessor::setUiScale (float s)
+{
+    if (std::abs (uiScale() - s) > 1.0e-3f)
+        settingsTree().setProperty (kUiScaleProp, juce::jlimit (0.5f, 1.5f, s), nullptr);
 }
 
 juce::ValueTree VivisectProcessor::soundStateSnapshot()
@@ -687,6 +806,7 @@ namespace
     // The crash handler runs in a process that is already falling over, so it
     // touches nothing but a path captured up front and a raw append.
     juce::File g_crashLogPath;
+    int g_crashLoggers = 0;      // instances with logging on (message thread only)
 
     void vivisectCrashHandler (void*)
     {
@@ -698,6 +818,38 @@ namespace
             << "when: " << juce::Time::getCurrentTime().toString (true, true) << "\n"
             << juce::SystemStats::getStackBacktrace() << "\n";
         g_crashLogPath.appendText (out, false, false, "\n");
+    }
+
+    // JUCE can install a crash handler but not remove one (passing nullptr
+    // asserts, then leaves a handler that calls through a null pointer). Save
+    // whatever the OS had before installing and put exactly that back after.
+   #if defined (_WIN32)
+    LPTOP_LEVEL_EXCEPTION_FILTER g_prevFilter = nullptr;
+   #else
+    constexpr int kCrashSignals[] { SIGFPE, SIGILL, SIGSEGV, SIGBUS, SIGABRT, SIGSYS };
+    struct sigaction g_prevActions[std::size (kCrashSignals)] {};
+   #endif
+
+    void installCrashHandler()
+    {
+       #if defined (_WIN32)
+        g_prevFilter = SetUnhandledExceptionFilter (nullptr);
+       #else
+        for (size_t i = 0; i < std::size (kCrashSignals); ++i)
+            sigaction (kCrashSignals[i], nullptr, &g_prevActions[i]);
+       #endif
+        juce::SystemStats::setApplicationCrashHandler (vivisectCrashHandler);
+    }
+
+    void uninstallCrashHandler()
+    {
+       #if defined (_WIN32)
+        SetUnhandledExceptionFilter (g_prevFilter);
+        g_prevFilter = nullptr;
+       #else
+        for (size_t i = 0; i < std::size (kCrashSignals); ++i)
+            sigaction (kCrashSignals[i], &g_prevActions[i], nullptr);
+       #endif
     }
 }
 
@@ -883,8 +1035,14 @@ void VivisectProcessor::setCrashLogEnabled (bool on)
         appendToCrashLog ("--- crash logging switched off by the user at "
                           + juce::Time::getCurrentTime().toString (true, true) + " ---");
         crashLogOn = false;
-        g_crashLogPath = juce::File();
-        juce::SystemStats::setApplicationCrashHandler (nullptr);
+        // Several instances can log at once; the handler goes only when the
+        // last of them switches off.
+        if (--g_crashLoggers <= 0)
+        {
+            g_crashLoggers = 0;
+            g_crashLogPath = juce::File();
+            uninstallCrashHandler();
+        }
         crashLogFile = juce::File();
         return;
     }
@@ -903,8 +1061,11 @@ void VivisectProcessor::setCrashLogEnabled (bool on)
                              "Everything below happened after logging was switched on.\n\n",
                              false, false, "\n");
 
+    // Another instance may already own the handler; then just retarget the
+    // path rather than saving JUCE's handler as the "previous" one.
     g_crashLogPath = crashLogFile;
-    juce::SystemStats::setApplicationCrashHandler (vivisectCrashHandler);
+    if (g_crashLoggers++ == 0)
+        installCrashHandler();
 }
 
 void VivisectProcessor::appendToCrashLog (const juce::String& line)

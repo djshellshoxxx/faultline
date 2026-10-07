@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Vivisect VERSION 0.9.2 LANGUAGES C CXX)
+project(Vivisect VERSION 0.9.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,8 +86,8 @@ option(VIVISECT_BUILD_CLAP "Build the CLAP version" ON)
 if(VIVISECT_BUILD_CLAP)
     FetchContent_Declare(clap-juce-extensions
         GIT_REPOSITORY https://github.com/free-audio/clap-juce-extensions.git
-        GIT_TAG main
-        GIT_SHALLOW ON)
+        # Pinned so a release build is reproducible; bump deliberately.
+        GIT_TAG 7adee3a1bd4684d4caa5601100e364abccff4b4d)
     FetchContent_MakeAvailable(clap-juce-extensions)
 
     clap_juce_extensions_plugin(TARGET Vivisect
@@ -132,4 +132,12 @@ if(VIVISECT_BUILD_TESTS)
 
     target_compile_definitions(VivisectTests PRIVATE
         JUCE_STANDALONE_APPLICATION=1)
+
+    # A console program, so its report reaches the terminal / CI log. main()
+    # holds dozens of ~27 KB processors in separate test blocks; GCC/Clang
+    # reuse those stack slots but MSVC reserves them all up front, which
+    # overflows Windows' 1 MB default stack before the first line runs.
+    if(MSVC)
+        target_link_options(VivisectTests PRIVATE /SUBSYSTEM:CONSOLE /STACK:16777216)
+    endif()
 endif()

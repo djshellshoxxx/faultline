@@ -21,6 +21,11 @@ cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
+Pre-built Windows and Linux packages (VST3, CLAP, Standalone; LV2 on Linux)
+are produced by the **Release builds** GitHub Actions workflow on every pull
+request and attached to a GitHub Release whenever a `v*` tag is pushed. See
+[INSTALL.md](INSTALL.md) for where each file goes.
+
 Outputs (under `build/Vivisect_artefacts/Release/`):
 
 * `VST3/Vivisect.vst3`
@@ -219,6 +224,17 @@ behaviour is independent of host buffer size. Reorder's Euclidean mode uses a
 maximally-even Bjorklund-style pattern instead of front-loading pulse slices.
 The specimen exporter supports 16/24/32-bit PCM WAV and reports filename, folder,
 duration and selected quality.
+
+0.9.3 release audit: BUFFER (4/8/16 bars) now limits how far back the surgeons
+reach (previously it only changed the display, and slices could come from up to
+45 s back); CORRUPT clicks scale with the slice so silence stays silent; MIDI CC
+moves are applied on the audio thread but reported to the host from the message
+thread (required by CLAP); loaded samples are re-loaded with the host session;
+the crash handler is removed cleanly when the plug-in closes; the editor no
+longer crashes if it opens before audio starts; and the window is resizable
+(50-150 %, opens shrunk to fit small screens). Verified with pluginval
+(strictness 10, VST3), clap-validator (CLAP) and an ASan/UBSan debug run of the
+test harness.
 
 
 ## Plain-language overview

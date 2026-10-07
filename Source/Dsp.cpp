@@ -605,6 +605,10 @@ public:
         active   = true;
         startOff = c.startOffset;
         chaosAmt = c.chaos;
+        // Clicks are damage to the material, so they scale with it: a silent
+        // slice must stay silent rather than click forever.
+        clickLevel = juce::jmin (1.f, juce::jmax (slice.getMagnitude (0, 0, sliceLen),
+                                                  slice.getMagnitude (1, 0, sliceLen)) * 2.f);
         holdCnt  = 0; wowPhase = 0.0; dropRun = 0;
         lastGrabStart.store ((i64) c.sourcePos);
         lastGrabLen.store (sliceLen);
@@ -636,7 +640,7 @@ public:
                 dropRun = (int) (sr * 0.01 * (0.5 + rng.nextFloat()));
             if (rng.nextFloat() < 0.0006f * mClick * (1.f + chaosAmt))
             {
-                const float cl = (rng.nextFloat() * 2.f - 1.f) * 0.8f;
+                const float cl = (rng.nextFloat() * 2.f - 1.f) * 0.8f * clickLevel;
                 oL += cl; oR += cl;
             }
             if (mTape > 0.001f) { azlp += (oR - azlp) * (0.5f - 0.35f * mTape); oR = azlp; }
@@ -652,7 +656,7 @@ private:
     juce::AudioBuffer<float> slice;
     int sliceLen = 0, durLeft = 0, startOff = 0, holdCnt = 0, dropRun = 0;
     double readPos = 0, wowPhase = 0;
-    float heldL = 0, heldR = 0, azlp = 0, chaosAmt = 0;
+    float heldL = 0, heldR = 0, azlp = 0, chaosAmt = 0, clickLevel = 0;
     bool active = false;
     juce::Random rng { 0x7c001 };
 };
@@ -917,7 +921,8 @@ void SurgeonRack::process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOu
 //  SliceScheduler
 // ===========================================================================
 TriggerContext SliceScheduler::makeManualContext (float p1, int sourceSelect, float morph, float chaos,
-                                                  double spb, SpecimenBuffer& spec, SpecimenAnalysis& an)
+                                                  double spb, SpecimenBuffer& spec, SpecimenAnalysis& an,
+                                                  double regionSamples)
 {
     TriggerContext c;
     c.rng = &rng; c.specimen = &spec; c.analysis = &an;
@@ -927,7 +932,7 @@ TriggerContext SliceScheduler::makeManualContext (float p1, int sourceSelect, fl
     c.sourceSelect = sourceSelect;
     c.morph = morph;
     c.nowPos = spec.writePos();
-    const i64 minAbs = std::max<i64> (0, c.nowPos - spec.capacitySamples() + 8);
+    const i64 minAbs = oldestAllowed (c.nowPos, spec, regionSamples);
     const double minLen = 0.01 * sampleRate;
     const double available = juce::jmax (minLen, (double) c.nowPos - (double) minAbs - 4.0);
     const double len = juce::jlimit (minLen, juce::jmin (2.0 * sampleRate, available),

@@ -6,14 +6,20 @@
 #include "PluginProcessor.h"
 #include "Ui.h"
 
-class VivisectEditor : public juce::AudioProcessorEditor,
+// The whole UI, laid out at a fixed design size. VivisectEditor below scales
+// it as one piece, which is how JUCE wants a zoomable editor built: the host
+// owns the editor's own transform, so the zoom lives on this child instead.
+class VivisectView : public juce::Component,
                        public vsx::ParamHost,
                        public juce::FileDragAndDropTarget,
                        private juce::Timer
 {
 public:
-    explicit VivisectEditor (VivisectProcessor&);
-    ~VivisectEditor() override;
+    explicit VivisectView (VivisectProcessor&);
+    ~VivisectView() override;
+
+    static int designWidth() noexcept;
+    static int designHeight() noexcept;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -51,6 +57,7 @@ private:
 
     void refreshPresetList();
     void chooseSample (int slot);
+    void loadSampleWithFeedback (int slot, const juce::File&);
     void showMainMenu();
     void doSaveAs();
     void doOpen();
@@ -117,6 +124,27 @@ private:
     // The hidden effect's trigger: the identity notch in the top-left corner.
     juce::Rectangle<int> secretHotspot() const { return { 0, 0, 12, 12 }; }
     std::unique_ptr<juce::FileChooser> chooser;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VivisectView)
+};
+
+// ---------------------------------------------------------------------------
+//  The editor the host sees: a resizable, fixed-aspect frame that scales the
+//  design-size view to fit. The chosen size is remembered with the session,
+//  and the first open shrinks to fit screens shorter than the design height.
+// ---------------------------------------------------------------------------
+class VivisectEditor : public juce::AudioProcessorEditor
+{
+public:
+    explicit VivisectEditor (VivisectProcessor&);
+    void resized() override;
+    void paint (juce::Graphics&) override;
+
+    static constexpr float minScale = 0.5f, maxScale = 1.5f;
+
+private:
+    VivisectProcessor& proc;
+    VivisectView view;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VivisectEditor)
 };

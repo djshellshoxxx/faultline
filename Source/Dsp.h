@@ -491,6 +491,9 @@ struct MusicalContext
     int    gridIndex = 0;
     float  pull = 0.8f, swing = 0.f;
     bool   playing = false;
+    // How far back the surgeons may reach: the BUFFER length (4/8/16 bars).
+    // 0 means the whole ring.
+    double regionSamples = 0.0;
 };
 
 class SliceScheduler
@@ -544,7 +547,7 @@ public:
                 ctx.sourceSelect = sourceSelect; ctx.morph = morph;
                 ctx.nowPos = spec.writePos();
 
-                const i64 minAbs = std::max<i64> (0, ctx.nowPos - spec.capacitySamples() + 8);
+                const i64 minAbs = oldestAllowed (ctx.nowPos, spec, mc.regionSamples);
                 double srcPos = (double) ctx.nowPos - (1.0 + rng.nextFloat() * 3.0) * mc.samplesPerBeat;
                 if (rng.nextFloat() >= cf.gridBypass)
                     srcPos = snapToGrid (srcPos, mc.gridIndex, mc.samplesPerBeat, mc.pull, mc.swing);
@@ -561,7 +564,7 @@ public:
                     }
                 }
                 if (rng.nextFloat() < cf.wrongSlice)
-                    srcPos = (double) ctx.nowPos - rng.nextFloat() * spec.capacitySamples() * 0.9;
+                    srcPos = (double) ctx.nowPos - rng.nextFloat() * (double) (ctx.nowPos - minAbs) * 0.9;
 
                 double len = step * (0.5 + p1[si] * 3.5);
                 len *= 1.0 + (rng.nextFloat() * 2.f - 1.f) * cf.lengthJitter * 0.8;
@@ -583,7 +586,17 @@ public:
     }
 
     TriggerContext makeManualContext (float p1, int sourceSelect, float morph, float chaos,
-                                      double samplesPerBeat, SpecimenBuffer& spec, SpecimenAnalysis& an);
+                                      double samplesPerBeat, SpecimenBuffer& spec, SpecimenAnalysis& an,
+                                      double regionSamples = 0.0);
+
+    // Oldest absolute position a slice may start at: the BUFFER length back
+    // from now, never more than the ring actually holds.
+    static i64 oldestAllowed (i64 nowPos, const SpecimenBuffer& spec, double regionSamples) noexcept
+    {
+        double reach = (double) spec.capacitySamples() - 8.0;
+        if (regionSamples > 0.0) reach = std::min (reach, regionSamples);
+        return std::max<i64> (0, nowPos - (i64) reach);
+    }
 
     juce::Random rng { 0x5ec7107 };
 
