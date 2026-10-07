@@ -55,17 +55,16 @@ jobs:
 
       - name: Run test harness (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          set +e
-          ls -la build/Release/
-          ldd ./build/Release/VivisectTests.exe || true
-          cmd //c "build\\Release\\VivisectTests.exe > tests-cmd.log 2>&1 & echo cmd errorlevel %ERRORLEVEL%"
-          head -c 3000 tests-cmd.log || true
-          ./build/Release/VivisectTests.exe 2>&1 | tee tests-windows.log
-          code=${PIPESTATUS[0]}
-          echo "harness exit code: $code"
-          exit $code
+          $p = Start-Process -FilePath "build\Release\VivisectTests.exe" -NoNewWindow -Wait -PassThru `
+                 -RedirectStandardOutput tests-out.log -RedirectStandardError tests-err.log
+          Get-Content tests-out.log -Tail 60
+          Get-Content tests-err.log -Tail 20
+          "harness exit code: {0} (0x{0:X8})" -f $p.ExitCode
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 3 -ErrorAction SilentlyContinue |
+            Format-List TimeCreated, Message
+          exit $p.ExitCode
 
       - name: Run test harness (Linux)
         if: runner.os == 'Linux'
