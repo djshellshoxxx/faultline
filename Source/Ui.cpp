@@ -160,8 +160,9 @@ void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::C
                true, locked);
     m.addItem (6, "Clear all Randomize / Mutate locks", host.lockedParameterCount() > 0);
 
+    const SafeTarget safe (target);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target),
-                     [&host, paramID, safe = SafeTarget (target)] (int choice)
+                     [&host, paramID, safe] (int choice)
                      {
                          if (choice == 0 || safe == nullptr) return;
                          auto* p = host.params().getParameter (paramID);
@@ -1644,7 +1645,9 @@ DebugPanel::DebugPanel() : OverlayPanel ("VIVISECT - DEBUG")
                         .withButton ("Reset everything")
                         .withButton ("Cancel");
 
-        juce::AlertWindow::showAsync (opts, [safe = juce::Component::SafePointer<DebugPanel> (this)] (int result)
+        // A plain local, not an init-capture: MSVC rejects the latter here.
+        juce::Component::SafePointer<DebugPanel> safe (this);
+        juce::AlertWindow::showAsync (opts, [safe] (int result)
         {
             if (result == 1 && safe != nullptr && safe->onHardReset)
                 safe->onHardReset();
