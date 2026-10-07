@@ -55,7 +55,13 @@ jobs:
 
       - name: Run test harness (Windows)
         if: runner.os == 'Windows'
-        run: build/Release/VivisectTests.exe
+        shell: bash
+        run: |
+          set +e
+          ./build/Release/VivisectTests.exe 2>&1 | tee tests-windows.log
+          code=${PIPESTATUS[0]}
+          echo "harness exit code: $code"
+          exit $code
 
       - name: Run test harness (Linux)
         if: runner.os == 'Linux'
