@@ -2,11 +2,14 @@ name: Release builds
 
 # Builds VST3, CLAP and Standalone for Windows and Linux (plus LV2 on Linux),
 # runs the headless test harness against the exact shipping code, and uploads
-# zipped packages as workflow artifacts. Pushing a tag such as v0.9.3 also
-# publishes those zips as a GitHub Release.
+# zipped packages as workflow artifacts. The zips are published as a GitHub
+# Release when a tag such as v0.9.3 is pushed, or when main is pushed with a
+# version in CMakeLists.txt that has no release yet (the tag is created then).
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   pull_request:
@@ -98,9 +101,46 @@ jobs:
           name: Vivisect-${{ matrix.name }}
           path: ${{ env.PKG }}
 
+  # One job publishes every platform's zip, so the matrix jobs never race to
+  # create the same release.
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide whether to publish
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(grep -oP 'project\(Vivisect VERSION \K[0-9.]+' CMakeLists.txt)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="v$VER"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/heads/main ]] && gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists; bump the version to publish a new one."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v4
+        if: steps.rel.outputs.publish == 'true'
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.rel.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.PKG }}
+          tag_name: ${{ steps.rel.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Vivisect ${{ steps.rel.outputs.tag }}
+          files: dist/*.zip
           generate_release_notes: true
