@@ -79,9 +79,10 @@ public:
     bool loadPresetFromFile (const juce::File&);
     juce::File getLastPresetFile() const { return lastPresetFile; }
 
-    void loadSampleInto (int slot, const juce::File&);
+    bool loadSampleInto (int slot, const juce::File&);
     void clearSampleSlot (int slot);
     bool slotHasSample (int slot) const { return specimen.hasSample (slot); }
+    juce::File sampleFile (int slot) const { return sampleFiles[juce::jlimit (0, 1, slot)]; }
 
     // export the current specimen buffer as a wav (the "special function"
     // export for an effect: the butchered specimen itself)
@@ -130,6 +131,8 @@ public:
     // -- options ------------------------------------------------------------
     bool tooltipsEnabled() const;
     void setTooltipsEnabled (bool);
+    float uiScale() const;                   // editor zoom; <= 0 if never set
+    void  setUiScale (float);
 
     // -- MIDI learn ---------------------------------------------------------
     void beginMidiLearn (const juce::String& paramID);
@@ -139,11 +142,18 @@ public:
     void setCCForParam (const juce::String& paramID, int cc);
     void clearCCForParam (const juce::String& paramID);
 
+    // MIDI CC moves arrive on the audio thread, where telling the host about a
+    // parameter change is not allowed (CLAP forbids it outright). The audio
+    // thread applies the value to the DSP at once and queues it; this pushes
+    // the queue to the host from the message thread. Called by the timer.
+    void flushPendingMidiParameterChanges();
+
 private:
     void timerCallback() override;
     static juce::AudioProcessorValueTreeState::ParameterLayout layout() { return vsx::createParameterLayout(); }
 
     float pv (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
+    double bufferRegionSamples (double samplesPerBeat) const;
     float pvMod (const char* id, int destEnum);
     void  applyPresetMap (const std::map<juce::String, float>&);
 
@@ -193,12 +203,16 @@ private:
     std::array<std::atomic<int>, 128> ccToParam;
     std::atomic<int> learnParamIndex { -1 };
     std::atomic<bool> midiMapDirty { false };   // audio thread learned a CC
+    std::array<std::atomic<float>, 128> pendingCCValue;   // < 0 = nothing queued
+    std::array<std::atomic<int>, 128>   pendingCCParam;
+    int timerTicks = 0;
 
     // A/B compare
     juce::ValueTree abState[2];
     int abSlot = 0;
 
     juce::File lastPresetFile;
+    juce::File sampleFiles[2];          // re-loaded with the host session
     juce::StringArray parameterLocks;
     juce::Random rng { (juce::uint32) juce::Time::currentTimeMillis() };
     bool randomisedOnce = false;

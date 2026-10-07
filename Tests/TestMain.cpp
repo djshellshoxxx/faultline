@@ -16,6 +16,7 @@
 // ============================================================================
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "PluginEditor.h"
 #include "Theme.h"
 #include <cmath>
 #include <cstdio>
@@ -300,6 +301,84 @@ int main()
     //  producing sound after the input stops - that is the instrument, not a
     //  leak. What it must not do is sustain forever once the buffer has been
     //  overwritten with silence and nothing is feeding output back in.
+    beginCase ("Editor paths are safe before prepareToPlay (no audio device yet)");
+    {
+        VivisectProcessor p;
+        auto snap = std::make_unique<vsx::MonitorSnapshot>();
+        p.buildMonitorSnapshot (*snap);
+        check (snap->numGrabs == 0 && snap->numTransients == 0, "monitor snapshot is empty, not a crash");
+        p.rewindToNormalized (0.5f);
+        p.triggerSurgeonManual (0);
+        double secs = 1.0;
+        check (! p.exportSpecimenToWav (File::getSpecialLocation (File::tempDirectory)
+                                            .getChildFile ("vsx_unprepared.wav"), 24, &secs) && secs == 0.0,
+               "export refuses cleanly with nothing recorded");
+        std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
+        check (ed != nullptr, "editor can be created before prepareToPlay");
+        if (ed != nullptr)
+        {
+            const int w0 = ed->getWidth(), h0 = ed->getHeight();
+            ed->setSize (VivisectView::designWidth() * 3 / 4, VivisectView::designHeight() * 3 / 4);
+            check (std::abs (p.uiScale() - 0.75f) < 0.01f, "resizing the editor records the UI scale");
+            ed->setSize (w0, h0);
+        }
+        p.setUiScale (0.8f);
+        MemoryBlock uiState;
+        p.getStateInformation (uiState);
+        VivisectProcessor q;
+        q.setStateInformation (uiState.getData(), (int) uiState.getSize());
+        check (std::abs (q.uiScale() - 0.8f) < 1.0e-3f, "UI scale is restored with the session");
+        if (ed != nullptr)
+        {
+            Image img (Image::ARGB, ed->getWidth(), ed->getHeight(), true);
+            Graphics g (img);
+            ed->paintEntireComponent (g, true);
+            check (true, "editor paints before prepareToPlay");
+        }
+    }
+
+    beginCase ("Each surgeon alone drains to silence (CORRUPT clicks, stale slices)");
+    for (int only = 0; only < vsx::kNumSurgeons; ++only)
+        for (float ch : { 0.f, 0.05f, 0.2f })
+        {
+            VivisectProcessor p;
+            p.prepareToPlay (kRate, kBlock);
+            p.resetAllToDefaults();
+            p.apvts.getParameter (vsx::id::bufferBars)->setValueNotifyingHost (0.f);
+            p.apvts.getParameter (vsx::id::reinject)->setValueNotifyingHost (0.f);
+            p.apvts.getParameter (vsx::id::chaos)->setValueNotifyingHost (ch);
+            p.apvts.getParameter (vsx::id::dryWet)->setValueNotifyingHost (1.f);
+            for (int s = 0; s < vsx::kNumSurgeons; ++s)
+                p.apvts.getParameter (vsx::sid (s, "on"))->setValueNotifyingHost (s == only ? 1.f : 0.f);
+            runBlocks (p, 400, kBlock, kRate, false, false);
+            // 4 bars at the default 120 BPM is 8 s; 12 s of silence clears it.
+            runBlocks (p, (int) (12.0 * kRate / kBlock), kBlock, kRate, false, true);
+            const auto after = runBlocks (p, (int) (3.0 * kRate / kBlock), kBlock, kRate, false, true);
+            check (after.finite && after.peak < 0.05f,
+                   String (vsx::surgeonName (only)) + " at chaos " + String (ch, 2)
+                   + " is silent once the 4-bar buffer holds only silence (peak " + String (after.peak, 5) + ")");
+        }
+
+    beginCase ("BUFFER length limits how far back slices may reach");
+    {
+        vsx::SpecimenBuffer spec;
+        spec.prepare (kRate, 45.0);
+        AudioBuffer<float> block (2, kBlock);
+        block.clear();
+        for (int i = 0; i < (int) (50.0 * kRate / kBlock); ++i) spec.push (block);
+        const auto now = spec.writePos();
+        const double spb = 0.5 * kRate;                       // 120 BPM
+        const double region4 = 4 * 4.0 * spb, region16 = 16 * 4.0 * spb;
+        check (vsx::SliceScheduler::oldestAllowed (now, spec, region4) == now - (vsx::i64) region4,
+               "4 bars reaches exactly 4 bars back");
+        check (vsx::SliceScheduler::oldestAllowed (now, spec, region16) == now - (vsx::i64) region16,
+               "16 bars reaches exactly 16 bars back");
+        check (vsx::SliceScheduler::oldestAllowed (now, spec, 1.0e12) >= now - spec.capacitySamples(),
+               "a region longer than the ring is clamped to the ring");
+        check (vsx::SliceScheduler::oldestAllowed (100, spec, region4) == 0,
+               "never reaches before the start of the recording");
+    }
+
     beginCase ("Buffer drains to silence once nothing is feeding it");
     {
         VivisectProcessor p;
@@ -319,7 +398,9 @@ int main()
             if (auto* par = p.apvts.getParameter (vsx::sid (s, "on")))
                 par->setValueNotifyingHost (1.f);
 
-        runBlocks (p, 400, kBlock, kRate, true, false);    // prime the specimen
+        // Prime without MIDI: the default CC map would otherwise move CHAOS
+        // and TRIGGER away from the values this case sets up.
+        runBlocks (p, 400, kBlock, kRate, false, false);   // prime the specimen
 
         // The plugin is SUPPOSED to keep sounding for a while after the input
         // stops - it is replaying a buffer. So drain first and measure after,
@@ -552,6 +633,37 @@ int main()
                 if (! inspect (buf).finite) { finite = false; break; }
             }
         check (finite, "all 128 CCs at three values handled without NaN");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("MIDI CC mapping is audible at once and reaches the host off the audio thread");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        auto* chaos = p.apvts.getParameter (vsx::id::chaos);
+        chaos->setValueNotifyingHost (0.f);
+
+        struct Spy : AudioProcessorParameter::Listener
+        {
+            int changes = 0;
+            void parameterValueChanged (int, float) override { ++changes; }
+            void parameterGestureChanged (int, bool) override {}
+        } spy;
+        chaos->addListener (&spy);
+
+        AudioBuffer<float> buf (2, kBlock);
+        MidiBuffer midi;
+        fillTestSignal (buf, 0, kRate);
+        midi.addEvent (MidiMessage::controllerEvent (1, 22, 127), 0);   // CC22 -> Chaos
+        p.processBlock (buf, midi);
+
+        check (spy.changes == 0, "processBlock does not notify the host about CC moves");
+        check (std::abs (p.apvts.getRawParameterValue (vsx::id::chaos)->load() - 1.f) < 1.0e-4f,
+               "the DSP sees the CC value in the same block");
+        p.flushPendingMidiParameterChanges();
+        check (spy.changes >= 1 && std::abs (chaos->getValue() - 1.f) < 1.0e-4f,
+               "the queued CC value reaches the parameter (and host) from the message thread");
+        chaos->removeListener (&spy);
     }
 
     // -----------------------------------------------------------------------
@@ -1229,6 +1341,84 @@ int main()
                 everOn = everOn || on->getValue() > 0.5f;
         }
         check (! everOn, "200 randomisations never switch FLATLINE on");
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Loaded samples are restored with the host session, not by presets");
+    {
+        auto tmp = File::getSpecialLocation (File::tempDirectory).getChildFile ("vsx_sample_test.wav");
+        {
+            AudioBuffer<float> b (2, 4800);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                b.setSample (0, i, 0.5f * std::sin (0.05f * (float) i));
+                b.setSample (1, i, 0.f);
+            }
+            tmp.deleteFile();
+            WavAudioFormat wav;
+            std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (tmp.createOutputStream().release(),
+                                                                       48000.0, 2, 24, {}, 0));
+            check (w != nullptr && w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()), "test wav written");
+        }
+
+        VivisectProcessor a;
+        a.prepareToPlay (kRate, kBlock);
+        check (a.loadSampleInto (0, tmp), "a real wav loads into slot A");
+        check (! a.loadSampleInto (1, File::getSpecialLocation (File::tempDirectory).getChildFile ("nope.wav")),
+               "a missing file reports failure");
+        check (! a.loadSampleInto (5, tmp), "an invalid slot reports failure");
+
+        MemoryBlock mb;
+        a.getStateInformation (mb);
+
+        VivisectProcessor b;
+        b.prepareToPlay (kRate, kBlock);
+        b.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (b.slotHasSample (0) && b.sampleFile (0) == tmp, "session restore reloads sample A");
+        check (! b.slotHasSample (1), "session restore leaves an empty slot empty");
+
+        // A preset written from this state must not drag the sample along.
+        auto presetFile = File::getSpecialLocation (File::tempDirectory).getChildFile ("vsx_sample_test.vsxpreset");
+        check (b.savePresetToFile (presetFile), "preset saved");
+        check (! presetFile.loadFileAsString().contains ("VSX_SAMPLES"), "presets do not reference samples");
+        check (b.loadPresetFromFile (presetFile) && b.slotHasSample (0), "loading a preset keeps the loaded sample");
+
+        // A session saved with no samples clears whatever is loaded.
+        VivisectProcessor empty;
+        MemoryBlock mbEmpty;
+        empty.getStateInformation (mbEmpty);
+        b.setStateInformation (mbEmpty.getData(), (int) mbEmpty.getSize());
+        check (! b.slotHasSample (0), "restoring a sample-less session clears slot A");
+
+        b.clearSampleSlot (0);
+        check (b.sampleFile (0) == File(), "clearing a slot forgets its file");
+        presetFile.deleteFile();
+        tmp.deleteFile();
+    }
+
+    // -----------------------------------------------------------------------
+    beginCase ("Crash logging survives multiple instances and instance teardown");
+    {
+        File logA, logB;
+        {
+            VivisectProcessor a, b;
+            a.setCrashLogEnabled (true);
+            b.setCrashLogEnabled (true);
+            logA = a.currentCrashLogFile();
+            logB = b.currentCrashLogFile();
+            check (a.isCrashLogEnabled() && b.isCrashLogEnabled(), "two instances can log at once");
+            a.setCrashLogEnabled (false);
+            check (b.isCrashLogEnabled(), "switching one off leaves the other logging");
+            // b is destroyed with logging still on - the destructor must
+            // uninstall the handler rather than leave it pointing at freed code.
+        }
+        VivisectProcessor c;
+        c.setCrashLogEnabled (true);
+        check (c.isCrashLogEnabled(), "logging can be re-enabled after an instance died while logging");
+        const auto logC = c.currentCrashLogFile();
+        c.setCrashLogEnabled (false);
+        check (logC.loadFileAsString().contains ("switched off"), "the log records being switched off");
+        logA.deleteFile(); logB.deleteFile(); logC.deleteFile();
     }
 
     // -----------------------------------------------------------------------

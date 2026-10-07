@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Vivisect VERSION 0.9.2 LANGUAGES C CXX)
+project(Vivisect VERSION 0.9.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,8 +86,8 @@ option(VIVISECT_BUILD_CLAP "Build the CLAP version" ON)
 if(VIVISECT_BUILD_CLAP)
     FetchContent_Declare(clap-juce-extensions
         GIT_REPOSITORY https://github.com/free-audio/clap-juce-extensions.git
-        GIT_TAG main
-        GIT_SHALLOW ON)
+        # Pinned so a release build is reproducible; bump deliberately.
+        GIT_TAG 7adee3a1bd4684d4caa5601100e364abccff4b4d)
     FetchContent_MakeAvailable(clap-juce-extensions)
 
     clap_juce_extensions_plugin(TARGET Vivisect
