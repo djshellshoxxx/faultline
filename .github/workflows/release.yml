@@ -58,6 +58,10 @@ jobs:
         shell: bash
         run: |
           set +e
+          ls -la build/Release/
+          ldd ./build/Release/VivisectTests.exe || true
+          cmd //c "build\\Release\\VivisectTests.exe > tests-cmd.log 2>&1 & echo cmd errorlevel %ERRORLEVEL%"
+          head -c 3000 tests-cmd.log || true
           ./build/Release/VivisectTests.exe 2>&1 | tee tests-windows.log
           code=${PIPESTATUS[0]}
           echo "harness exit code: $code"
