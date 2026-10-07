@@ -35,6 +35,8 @@ struct ParamHost
 
 // Right-click menu shared by every control: MIDI map / reset / type a value.
 void showParamContextMenu (ParamHost&, const juce::String& paramID, juce::Component* target);
+// Closes an open "Set value..." dialog; the editor calls it when it is destroyed.
+void dismissValueEntry();
 
 // ---------------------------------------------------------------------------
 class VsxLookAndFeel : public juce::LookAndFeel_V4

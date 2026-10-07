@@ -109,7 +109,12 @@ namespace
 {
     std::unique_ptr<juce::AlertWindow> gValueWindow;
 
-    void showValueEntry (ParamHost& host, const juce::String& paramID)
+    // `target` is a child of the view that implements ParamHost, so while it is
+    // alive `host` is too. Every async callback checks it before touching host:
+    // the editor can be closed while a menu or dialog is still on screen.
+    using SafeTarget = juce::Component::SafePointer<juce::Component>;
+
+    void showValueEntry (ParamHost& host, const juce::String& paramID, SafeTarget target)
     {
         auto* param = host.params().getParameter (paramID);
         if (param == nullptr) return;
@@ -120,17 +125,19 @@ namespace
         gValueWindow->addButton ("SET",    1, juce::KeyPress (juce::KeyPress::returnKey));
         gValueWindow->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         gValueWindow->enterModalState (true, juce::ModalCallbackFunction::create (
-            [&host, paramID] (int result)
+            [&host, paramID, target] (int result)
             {
                 const juce::String text = gValueWindow != nullptr ? gValueWindow->getTextEditorContents ("v")
                                                                   : juce::String();
                 gValueWindow.reset();
-                if (result != 1 || text.isEmpty()) return;
+                if (result != 1 || text.isEmpty() || target == nullptr) return;
                 if (auto* p = host.params().getParameter (paramID))
                     p->setValueNotifyingHost (juce::jlimit (0.f, 1.f, p->getValueForText (text)));
             }), false);
     }
 }
+
+void dismissValueEntry() { gValueWindow.reset(); }
 
 void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::Component* target)
 {
@@ -154,14 +161,15 @@ void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::C
     m.addItem (6, "Clear all Randomize / Mutate locks", host.lockedParameterCount() > 0);
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target),
-                     [&host, paramID] (int choice)
+                     [&host, paramID, safe = SafeTarget (target)] (int choice)
                      {
+                         if (choice == 0 || safe == nullptr) return;
                          auto* p = host.params().getParameter (paramID);
                          if (p == nullptr) return;
                          switch (choice)
                          {
                              case 1: p->setValueNotifyingHost (p->getDefaultValue()); break;
-                             case 2: showValueEntry (host, paramID); break;
+                             case 2: showValueEntry (host, paramID, safe); break;
                              case 3: host.beginMidiLearnFor (paramID); break;
                              case 4: host.clearCCForParam (paramID); break;
                              case 5: host.setParameterLocked (paramID, ! host.isParameterLocked (paramID)); break;
@@ -1636,10 +1644,10 @@ DebugPanel::DebugPanel() : OverlayPanel ("VIVISECT - DEBUG")
                         .withButton ("Reset everything")
                         .withButton ("Cancel");
 
-        juce::AlertWindow::showAsync (opts, [this] (int result)
+        juce::AlertWindow::showAsync (opts, [safe = juce::Component::SafePointer<DebugPanel> (this)] (int result)
         {
-            if (result == 1 && onHardReset)
-                onHardReset();
+            if (result == 1 && safe != nullptr && safe->onHardReset)
+                safe->onHardReset();
         });
     };
     addAndMakeVisible (hardBtn);
