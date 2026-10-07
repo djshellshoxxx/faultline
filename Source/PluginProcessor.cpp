@@ -389,7 +389,6 @@ void VivisectProcessor::buildMonitorSnapshot (MonitorSnapshot& snap)
     const int cap = specimen.capacitySamples();
     const i64 wp = specimen.writePos();
     const double spb = 60.0 / lastBpm * sampleRate;
-    const double region = juce::jlimit (1024.0, (double) cap - 8.0, bufferRegionSamples (spb));
     const int COLS = MonitorSnapshot::COLS;
 
     snap.frozen = specimen.isFrozen();
@@ -409,6 +408,7 @@ void VivisectProcessor::buildMonitorSnapshot (MonitorSnapshot& snap)
         snap.numGrabs = 0;
         return;
     }
+    const double region = juce::jlimit (1024.0, (double) cap - 8.0, bufferRegionSamples (spb));
 
     const double base = (double) wp - region;
     for (int c = 0; c < COLS; ++c)
