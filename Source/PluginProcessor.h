@@ -6,6 +6,7 @@
 #include <memory>
 #include "Parameters.h"
 #include "Dsp.h"
+#include "Effects.h"
 
 // ============================================================================
 //  VIVISECT — sample butchery. See README.md.
@@ -46,6 +47,12 @@ public:
     vsx::TelemetryRing telem;
     vsx::Scar scar;
     bool scarWasOn = false;
+    // ==== EFFECTS (E1/E2) ====
+    vsx::Tourniquet tourniquet;
+    bool tourniquetWasOn = false;
+    vsx::Clot clot;
+    bool clotWasOn = false;
+    // ==== END EFFECTS (E1/E2) ====
     vsx::Flatline flatline;
     bool flatlineWasOn = false;
     bool crashLogOn = false;            // never restored from state, by design
@@ -153,6 +160,20 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout layout() { return vsx::createParameterLayout(); }
 
     float pv (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
+    // ==== EFFECTS (E1/E2) ====
+    // Raw-value/parameter pairs resolved once in the constructor so the audio
+    // thread never builds or hashes a string for the effect stages.
+    struct FxRef
+    {
+        juce::RangedAudioParameter* par = nullptr;
+        std::atomic<float>* raw = nullptr;
+        float get() const noexcept { return raw != nullptr ? raw->load() : 0.f; }
+    };
+    FxRef fxRef (const char* paramID) const;
+    float fxMod (const FxRef&, int destEnum) const noexcept;
+    FxRef fxTqOn, fxTqMode, fxTqCutoff, fxTqRes, fxTqEnv, fxTqMix,
+          fxClotOn, fxClotTime, fxClotFree, fxClotFeedback, fxClotTone, fxClotSpread, fxClotMix;
+    // ==== END EFFECTS (E1/E2) ====
     double bufferRegionSamples (double samplesPerBeat) const;
     float pvMod (const char* id, int destEnum);
     void  applyPresetMap (const std::map<juce::String, float>&);
