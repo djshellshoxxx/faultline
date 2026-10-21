@@ -394,7 +394,6 @@ struct ChaosField
     float lengthJitter  = 0.f;   // slice length variance
     float skipProb      = 0.f;   // dropped scheduled hits
     float wrongSlice    = 0.f;   // source position randomised
-    float routeSwap     = 0.f;   // surgeon assignment swap
     float feedback      = 0.f;   // extra reinject
     float pitchChaos    = 0.f;   // extra pitch drift
     float gridBypass    = 0.f;   // ignore gravity snap
@@ -472,6 +471,7 @@ public:
     void process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOut, int numSamples,
                   const std::array<float, kNumSurgeons>& mix,
                   const std::array<int,   kNumSurgeons>& routeIn,
+                  const std::array<float, kNumSurgeons>& routeAmt,
                   float reinjectAmt) noexcept;
 
     float maxActivity() const noexcept { return maxAct; }

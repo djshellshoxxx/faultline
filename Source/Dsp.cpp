@@ -284,7 +284,6 @@ ChaosField deriveChaos (float cIn) noexcept
     f.lengthJitter  = juce::jlimit (0.f, 1.f, (c - 0.15f) / 0.85f) * 0.8f;
     f.skipProb      = juce::jlimit (0.f, 0.55f, c - 0.30f);
     f.wrongSlice    = juce::jlimit (0.f, 0.90f, (c - 0.45f) * 1.6f);
-    f.routeSwap     = juce::jlimit (0.f, 0.50f, (c - 0.60f) * 1.2f);
     f.feedback      = juce::jlimit (0.f, 1.f,  (c - 0.55f) * 2.0f);
     f.pitchChaos    = sq;
     f.gridBypass    = juce::jlimit (0.f, 1.f,  (c - 0.70f) * 3.0f);
@@ -780,6 +779,13 @@ public:
         }
         durLeft = (int) ((0.2 + pp2 * 3.8) * sr);
         blur = pp3;
+        // G2 level tuning: measured against the Hann-weighted RMS of the grab,
+        // the constant 2/3 gain leaves the output +4.3 dB hot at BLUR 0 (every
+        // frame repeats the same windowed slice, so overlaps add coherently)
+        // and level at BLUR 1 (random phase, overlaps add in power). The excess
+        // follows 4.3 dB * cos(blur * pi/2) to within 0.15 dB, for noise, sine and
+        // drum material at 44.1/48/96 kHz, so take it back out here.
+        compGain = std::pow (10.f, -4.3f * std::cos (juce::jlimit (0.f, 1.f, blur) * 1.5707963f) / 20.f);
         std::fill (ola.begin(), ola.end(), 0.f);
         rp = 0; hopCd = H; gain = 1.f; active = true; startOff = c.startOffset;
         synthFrame (0);
@@ -824,7 +830,7 @@ private:
         // COLA compensation. A constant gain is important here: BLUR changes
         // spectral phase, so dividing by tiny per-sample window weights near
         // frame edges can create large spikes.
-        constexpr float overlapGain = 2.0f / 3.0f;
+        const float overlapGain = (2.0f / 3.0f) * compGain;
         for (int i = 0; i < N; ++i)
         {
             const auto idx = (size_t) ((at + i) % RING);
@@ -835,7 +841,7 @@ private:
     juce::dsp::WindowingFunction<float> window { (size_t) N, juce::dsp::WindowingFunction<float>::hann };
     std::vector<float> mag, runPhase, freq, tmp, ola, winTab;
     int rp = 0, hopCd = 0, durLeft = 0, startOff = 0;
-    float blur = 0.f, gain = 0.f;
+    float blur = 0.f, gain = 0.f, compGain = 1.f;
     bool active = false;
     juce::Random rng { 0x3fee1 };
 };
@@ -878,6 +884,7 @@ void SurgeonRack::reset()
 void SurgeonRack::process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOut, int n,
                            const std::array<float, kNumSurgeons>& mix,
                            const std::array<int,   kNumSurgeons>& routeIn,
+                           const std::array<float, kNumSurgeons>& routeAmt,
                            float reinjectAmt) noexcept
 {
     wetOut.clear();
@@ -897,10 +904,15 @@ void SurgeonRack::process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOu
     for (int d = 0; d < kNumSurgeons; ++d)
     {
         const int src = routeIn[(size_t) d] - 1;
-        if (src >= 0 && src < kNumSurgeons)
+        // Route In picks the source, Route Amt (G1) its level. Amt 0 adds
+        // nothing, so it is exactly "no routing". Any cycle stays bounded
+        // because the sum is written back through SpecimenBuffer::reinject,
+        // which tanh-limits the specimen on every pass.
+        const float amt = juce::jlimit (0.f, 1.f, routeAmt[(size_t) d]);
+        if (src >= 0 && src < kNumSurgeons && amt > 0.f)
         {
-            feedBuf.addFrom (0, 0, outs[(size_t) src], 0, 0, n, 0.5f);
-            feedBuf.addFrom (1, 0, outs[(size_t) src], 1, 0, n, 0.5f);
+            feedBuf.addFrom (0, 0, outs[(size_t) src], 0, 0, n, amt);
+            feedBuf.addFrom (1, 0, outs[(size_t) src], 1, 0, n, amt);
         }
     }
     const bool anyFeed = feedBuf.getMagnitude (0, 0, n) > 1.0e-5f;
