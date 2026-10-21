@@ -1,5 +1,7 @@
 # VIVISECT
 
+> Repository name: **faultline**. The product and build target are named **Vivisect**; references to these names in paths and artifacts refer to this project.
+
 **Sample butchery VST.** The incoming signal is treated as a *specimen*, not a
 signal. A rolling live buffer (4 / 8 / 16 bars) is continuously analysed and a
 rack of six parallel "surgeons" cut, granulate, rearrange, corrupt and reinject
