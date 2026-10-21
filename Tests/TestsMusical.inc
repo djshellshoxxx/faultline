@@ -55,7 +55,11 @@ MusicalRender musicalRender (double rate, int block, int blocks, Setup&& setup, 
     return r;
 }
 
-// The fixed scenario used for the 0.9.3 reference hash: everything on, busy.
+// The fixed scenario used for the 0.9.3 reference hash: busy, every surgeon on except FREEZE.
+// FREEZE is left off on purpose: 0.10.0 G2 retuned its level compensation, a deliberate change
+// to the FREEZE sound, so a render that includes it can no longer equal the 0.9.3 render. Routing
+// is off by default (Route In = Off, so Route Amt is inert). The reference hash below was
+// produced by the unmodified 0.9.3 sources (commit 84b39f8) for exactly this setup.
 void musicalGoldenSetup (VivisectProcessor& p)
 {
     musicalSet (p, vsx::id::chaos, 0.7f);
@@ -63,7 +67,7 @@ void musicalGoldenSetup (VivisectProcessor& p)
     musicalSet (p, vsx::id::reinject, 0.3f);
     for (int s = 0; s < vsx::kNumSurgeons; ++s)
     {
-        musicalSet (p, vsx::sid (s, "on").toRawUTF8(), 1.f);
+        musicalSet (p, vsx::sid (s, "on").toRawUTF8(), s == vsx::S_FREEZE ? 0.f : 1.f);
         musicalSet (p, vsx::sid (s, "prob").toRawUTF8(), 0.9f);
         musicalSet (p, vsx::sid (s, "p3").toRawUTF8(), 0.6f);
     }
@@ -303,7 +307,7 @@ static void run_musical_tests (double kRate, int kBlock)
         const auto ref = musicalRender (kRate, kBlock, blocks, [] (VivisectProcessor& p) { musicalGoldenSetup (p); });
        #if JUCE_LINUX
         if (kRate == 48000.0 && kBlock == 512)
-            check (ref.hash == 7421646214244336893ull,
+            check (ref.hash == 13751873635340590544ull,
                    "render matches the hash recorded from the 0.9.3 build (Linux, 48 kHz, 512)");
        #endif
 

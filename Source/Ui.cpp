@@ -901,27 +901,43 @@ void SurgeonStrip::timerCallback()
     const float a = getActivity ? getActivity() : 0.f;
     if (std::abs (a - act) > 0.005f || a > 0.f) { act = a; repaint(); }
 }
+void SurgeonStrip::setSimple (bool simple)
+{
+    simpleMode = simple;
+    for (auto* c : { (juce::Component*) prob.get(), (juce::Component*) k1.get(), (juce::Component*) k2.get(),
+                     (juce::Component*) k3.get(), (juce::Component*) routeAmt.get(), (juce::Component*) &route })
+        c->setVisible (! simple);
+    resized();
+    repaint();
+}
 void SurgeonStrip::resized()
 {
-    auto r = getLocalBounds().reduced (metric::grid, metric::gridFine);
+    auto r = getLocalBounds().reduced (metric::grid, 0);
     r.removeFromLeft (48 + metric::grid);          // icon area (painted)
 
     auto left = r.removeFromLeft (136);
     onBtn.setBounds (left.withSizeKeepingCentre (136, metric::buttonH));
 
     r.removeFromLeft (metric::grid);
-    const int kw = juce::jlimit (56, 72, (r.getWidth() - 112) / 5);
-    for (auto* s : { mix.get(), prob.get(), k1.get(), k2.get(), k3.get() })
+    // a small knob needs 12 (value) + 36 + 14 (arc) + 12 (caption) = 74px
+    const int knobH = juce::jmin (r.getHeight(), 74);
+    // five knobs, Route In (96) and Route Amt share what is left
+    const int kw = simpleMode ? 64 : juce::jlimit (48, 64, (r.getWidth() - 96 - 2 * metric::gridFine - 6 * metric::gridFine) / 6);
+    auto knobRow = [&] (juce::Rectangle<int> a) { return a.withSizeKeepingCentre (a.getWidth(), knobH); };
+    mix->setBounds (knobRow (r.removeFromLeft (kw)));
+    if (simpleMode)
+        return;
+    r.removeFromLeft (metric::gridFine);
+    for (auto* s : { prob.get(), k1.get(), k2.get(), k3.get() })
     {
-        s->setBounds (r.removeFromLeft (kw));
+        s->setBounds (knobRow (r.removeFromLeft (kw)));
         r.removeFromLeft (metric::gridFine);
     }
     r.removeFromLeft (metric::gridFine);
-    const int routeW = juce::jmin (104, juce::jmax (0, r.getWidth()));
-    route.setBounds (r.removeFromLeft (routeW).withSizeKeepingCentre (routeW, metric::buttonH - 4));
+    route.setBounds (r.removeFromLeft (96).withSizeKeepingCentre (96, metric::buttonH - 4));
     // ==== ROUTING (G1) ====
     r.removeFromLeft (metric::gridFine);
-    routeAmt->setBounds (r.removeFromLeft (juce::jmin (kw, juce::jmax (0, r.getWidth()))));
+    routeAmt->setBounds (knobRow (r.removeFromLeft (kw)));
     // ==== END ROUTING (G1) ====
 }
 void SurgeonStrip::paint (juce::Graphics& g)

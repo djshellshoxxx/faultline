@@ -400,6 +400,7 @@ static void run_routing_tests (double kRate, int kBlock)
     beginCase ("G1: every strip shows a labelled Route Amt knob with a tooltip, inside the strip");
     {
         VivisectProcessor p;
+        p.setSimpleViewEnabled (false);      // a fresh install opens in Simple view, which hides the AMT knobs
         std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
         check (ed != nullptr, "editor builds");
         if (ed != nullptr)

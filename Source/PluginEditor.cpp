@@ -11,28 +11,54 @@ using namespace vsx;
 
 namespace
 {
-    // ---- layout, all multiples of the 8px base grid -----------------------
-    constexpr int kW          = 1180;
+    // ---- layout, all multiples of the 8px base grid (4px for fine detail) -----
+    //
+    //  Full view is two columns under the header, then two full-width rows:
+    //
+    //    header 32
+    //    LEFT 700                      | RIGHT 612
+    //    rack: 6 surgeon strips        | monitor, chaos pulse
+    //    modulation (+ data stream)    | master knobs incl. DOSE, sidechain, snap, source
+    //    RANDOM / MUTATE / RESET / SAVE| I/O + level meter, MIDI / PANIC / DECAY buttons
+    //                                  | post-rack row: SCAR, TOURNIQUET, CLOT
+    //                                  | Scale Lock
+    //    capture shelf            (full width)
+    //    history bar              (full width)
+    //    footer
+    //
+    //  Simple view keeps the same window size and re-flows into a narrow rack on
+    //  the left and a large monitor + master row on the right (layoutSimple).
+    constexpr int kW          = 1360;
     constexpr int kHeaderH    = metric::header;    // 32
-    constexpr int kMonitorH   = 160;
-    constexpr int kMasterH    = 120;
-    constexpr int kIoH        = 88;
-    constexpr int kStripH     = 78;
-    constexpr int kBtnRowH    = 56;      // tall enough for the small knobs' captions
-    constexpr int kModHeadH   = 76;
+    constexpr int kG          = metric::grid;      // 8
+    constexpr int kF          = metric::gridFine;  // 4
+    constexpr int kPad        = metric::pad;       // 16
     constexpr int kSectionH   = 20;      // band for a section header + its hint text
-    constexpr int kModRowH    = 26;
+    constexpr int kStripH     = 72;      // small knob: 12 value row + 36 body + 14 arc + 12 caption = 74 incl. margins
+    constexpr int kModHeadH   = 74;
+    constexpr int kModRowH    = 24;
+    constexpr int kActionH    = 74;      // MUTATE AMT is a small knob
     constexpr int kHistoryH   = 24;
     constexpr int kFooterH    = 16;
-    constexpr int kCaptureH   = 48;      // UNDO/CAPTURE hook: capture row (button, length, shelf)
-    constexpr int kG          = metric::grid;      // 8
-    constexpr int kPad        = metric::pad;       // 16
+    constexpr int kCaptureH   = 48;
 
-    constexpr int kH = kHeaderH + kG + kMonitorH + kG + kMasterH + kG + kIoH + kG
-                     + kNumSurgeons * kStripH + kG + kBtnRowH + kG
-                     + kSectionH + kModHeadH + kNumModSlots * kModRowH + kG + kHistoryH
-                     + kG + kCaptureH            // UNDO/CAPTURE hook
-                     + kG + kFooterH;
+    constexpr int kColL       = 700;
+    constexpr int kColGap     = kPad;
+    constexpr int kColR       = kW - 2 * kPad - kColL - kColGap;   // 612
+    constexpr int kSimpleColL = 330;
+
+    constexpr int kLargeKnobH = 102;     // 12 + (64 + 14) + 12
+    constexpr int kSmallKnobH = 74;      // 12 + (36 + 14) + 12
+    constexpr int kComboH     = metric::buttonH - 4;               // 24
+    constexpr int kBtnH       = metric::buttonH + 4;               // 32
+
+    // The left column's height decides the body height.
+    constexpr int kBodyH = kSectionH + kNumSurgeons * kStripH + kG
+                         + kSectionH + kModHeadH + kNumModSlots * kModRowH + kG + kActionH;   // 732
+    constexpr int kBodyTop = kHeaderH + kG;
+
+    constexpr int kH = kBodyTop + kBodyH + kG + kCaptureH + kG + kHistoryH + kG + kFooterH;
+    static_assert (kH <= 900, "default window must stay at or under 900 px tall");
 }
 
 // ===========================================================================
@@ -109,8 +135,9 @@ VivisectView::VivisectView (VivisectProcessor& p)
     kReinj  = &addKnob (id::reinject, "REINJECT", "How much butchered output is written back into the specimen.");
     kAnalys = &addKnob (id::analysisInform, "ANALYSIS",
                         "Chance a slice is picked by analysis - brightest, loudest, most tonal, "
-                        "nearest transient - instead of by the grid.");
-    kMorph  = &addKnob (id::morph, "MORPH A/B", "Morph position between Sample A and Sample B.");
+                        "nearest transient - instead of by the grid.", VsxSlider::Size::small);
+    kMorph  = &addKnob (id::morph, "MORPH A/B", "Morph position between Sample A and Sample B.",
+                        VsxSlider::Size::small);
     kScAmt  = &addKnob (id::scAmount, "SC AMT", "How often a sidechain transient triggers a surgeon.",
                         VsxSlider::Size::small);
 
@@ -125,9 +152,10 @@ VivisectView::VivisectView (VivisectProcessor& p)
     // -- i/o -----------------------------------------------------------------
     cBuffer  = &addCombo (id::bufferBars, { "4 Bars", "8 Bars", "16 Bars" },
                           "BUFFER", "How much of the incoming signal the specimen buffer holds.");
-    kInTrim  = &addKnob (id::inputTrim, "IN TRIM", "Gain into the plugin, in dB.");
-    kOutTrim = &addKnob (id::outputTrim, "OUT TRIM", "Gain out of the plugin, in dB.");
-    kDecayT  = &addKnob (id::decayTime, "DECAY T", "How long Decay Over Time takes to reach maximum, in seconds.");
+    kInTrim  = &addKnob (id::inputTrim, "IN TRIM", "Gain into the plugin, in dB.", VsxSlider::Size::small);
+    kOutTrim = &addKnob (id::outputTrim, "OUT TRIM", "Gain out of the plugin, in dB.", VsxSlider::Size::small);
+    kDecayT  = &addKnob (id::decayTime, "DECAY T", "How long Decay Over Time takes to reach maximum, in seconds.",
+                         VsxSlider::Size::small);
 
     // -- action buttons ------------------------------------------------------
     bMidi  = &addParamButton (id::midiMode, "MIDI MODE",
@@ -146,10 +174,10 @@ VivisectView::VivisectView (VivisectProcessor& p)
                          VsxSlider::Size::small);
 
     // -- modulation ----------------------------------------------------------
-    kL1r  = &addKnob (id::lfo1Rate, "LFO 1", "LFO 1 rate, in Hz.");
-    kL2r  = &addKnob (id::lfo2Rate, "LFO 2", "LFO 2 rate, in Hz.");
-    kMac1 = &addKnob (id::macro1, "MACRO 1", "Macro 1. CC20 by default.");
-    kMac2 = &addKnob (id::macro2, "MACRO 2", "Macro 2. CC21 by default.");
+    kL1r  = &addKnob (id::lfo1Rate, "LFO 1", "LFO 1 rate, in Hz.", VsxSlider::Size::small);
+    kL2r  = &addKnob (id::lfo2Rate, "LFO 2", "LFO 2 rate, in Hz.", VsxSlider::Size::small);
+    kMac1 = &addKnob (id::macro1, "MACRO 1", "Macro 1. CC20 by default.", VsxSlider::Size::small);
+    kMac2 = &addKnob (id::macro2, "MACRO 2", "Macro 2. CC21 by default.", VsxSlider::Size::small);
     cL1s  = &addCombo (id::lfo1Shape, { "Sine", "Tri", "Saw", "Square", "S&H" }, {}, "LFO 1 shape.");
     cL2s  = &addCombo (id::lfo2Shape, { "Sine", "Tri", "Saw", "Square", "S&H" }, {}, "LFO 2 shape.");
 
@@ -356,6 +384,10 @@ VivisectView::VivisectView (VivisectProcessor& p)
     addAndMakeVisible (*dosePanel);
     addAndMakeVisible (*simpleBtn);
     addChildComponent (*hintStrip);
+    scaleToggle.setClickingTogglesState (true);
+    scaleToggle.setTooltip ("Scale Lock on / off. The root, scale and range live in the full view.");
+    addChildComponent (scaleToggle);
+    scaleToggleA = std::make_unique<BA> (proc.apvts, id::scaleOn, scaleToggle);
     simpleBtn->onChanged = [this] (bool on) { proc.setSimpleViewEnabled (on); applySimpleView (on); };
     hintStrip->onDismiss = [this] { proc.setFirstRunHintDismissed (true); hintStrip->setVisible (false); };
     hintStrip->setVisible (! proc.firstRunHintDismissed());
@@ -419,32 +451,6 @@ void VivisectView::beginMidiLearnFor (const juce::String& paramID)
     repaint();
 }
 
-// ==== MUSICAL/DOSE hook ====
-void VivisectView::applySimpleView (bool simple)
-{
-    simpleView = simple;
-    simpleBtn->setSimple (simple);
-
-    // The one place that lists what Simple view hides. Other panels (effects,
-    // capture shelf, ...) add their component pointers here. Null is skipped.
-    const juce::Array<juce::Component*> hidden {
-        // mod matrix
-        kL1r, kL2r, kMac1, kMac2, cL1s, cL2s, &stream,
-        mmSrc[0], mmSrc[1], mmSrc[2], mmSrc[3], mmDst[0], mmDst[1], mmDst[2], mmDst[3],
-        mmDepth[0], mmDepth[1], mmDepth[2], mmDepth[3],
-        // sidechain
-        cScMode, kScAmt,
-        // musical detail
-        scalePanel.get()
-        // effects panels: add pointers above this line
-    };
-    for (auto* c : hidden)
-        if (c != nullptr) c->setVisible (! simple);
-    for (auto* st : strips) st->setRouteVisible (! simple);      // routing
-    resized();      // re-evaluates the data stream's own fit test
-    repaint();
-}
-// ==== end MUSICAL/DOSE hook ====
 
 void VivisectView::timerCallback()
 {
@@ -749,24 +755,20 @@ void VivisectView::paint (juce::Graphics& g)
                      juce::Justification::centredLeft, col::textMuted, 10.f);
     }
 
-    // -- section headers + separators ---------------------------------------
-    if (strips.size() > 0)
+    // -- section headers + separators (laid out in resized()) ----------------
+    for (auto& h : headers)
     {
-        const int y = strips[0]->getY() - 14;
-        draw::sectionHeader (g, "SURGEONS", { kPad, y, 240, 12 });
+        draw::sectionHeader (g, h.text, { h.area.getX(), h.area.getY(), 240, 12 });
+        if (h.hint.isNotEmpty())
+        {
+            g.setColour (col::textMuted);
+            g.setFont (font::ui (11.f));
+            g.drawText (h.hint, h.area.getX() + 128, h.area.getY(), h.area.getWidth() - 128, 12,
+                        juce::Justification::centredLeft);
+        }
+        draw::separator (g, { h.area.getX(), h.area.getY() + 16, h.area.getWidth(), 1 });
     }
-    if (mmSrc[0] != nullptr && ! simpleView)       // MUSICAL/DOSE hook
-    {
-        const int y = kL1r->getY() - 14;
-        draw::sectionHeader (g, "MODULATION", { kPad, y, 240, 12 });
-        g.setColour (col::textMuted);
-        g.setFont (font::ui (11.f));
-        g.drawText ("MIDI  notes C3-F3 trigger surgeons 1-6     right-click any control to map, reset or type a value",
-                    kPad + 160, y, getWidth() - kPad - 176, 12, juce::Justification::centredLeft);
-        draw::separator (g, { kPad, y + 16, getWidth() - 2 * kPad, 1 });
-    }
-    if (history.getY() > 0)
-        draw::separator (g, { kPad, history.getY() - 6, getWidth() - 2 * kPad, 1 });
+    draw::separator (g, { kPad, history.getY() - 4, getWidth() - 2 * kPad, 1 });
 
     // -- footer : version, 9px muted mono, bottom right ---------------------
     g.setColour (col::textMuted);
@@ -801,8 +803,35 @@ void VivisectView::paint (juce::Graphics& g)
 }
 
 // ===========================================================================
+namespace
+{
+    // Spread widths over a row: equal gaps, first item flush left, last flush
+    // right. Each item is centred vertically in the row at the given height.
+    void justify (juce::Rectangle<int> row, std::initializer_list<std::pair<juce::Component*, int>> items,
+                  int height)
+    {
+        int total = 0;
+        for (auto& it : items) total += it.second;
+        const int n = (int) items.size();
+        const int gap = n > 1 ? juce::jmax (kF, (row.getWidth() - total) / (n - 1)) : 0;
+        int x = row.getX();
+        for (auto& it : items)
+        {
+            it.first->setBounds (juce::Rectangle<int> (x, row.getY(), it.second, row.getHeight())
+                                     .withSizeKeepingCentre (it.second, height));
+            x += it.second + gap;
+        }
+    }
+
+    void resize (juce::Component* c, int w, int h, int dy = 0)
+    {
+        c->setBounds (c->getBounds().withSizeKeepingCentre (w, h).translated (0, dy));
+    }
+}
+
 void VivisectView::resized()
 {
+    headers.clear();
     auto r = getLocalBounds();
 
     // -- header --------------------------------------------------------------
@@ -831,164 +860,241 @@ void VivisectView::resized()
     simpleBtn->setBounds (right.removeFromRight (72).withSizeKeepingCentre (72, 24));
     // ==== end MUSICAL/DOSE hook ====
 
-    // -- monitor -------------------------------------------------------------
-    r.removeFromTop (kG);
-    monitor.setBounds (r.removeFromTop (kMonitorH).reduced (kPad, 0));
-    // ==== MUSICAL/DOSE hook ==== hint strip rides on the monitor's lower edge
-    hintStrip->setBounds (monitor.getBounds().removeFromBottom (28).reduced (kG, 3));
-    hintStrip->toFront (false);
-    // ==== end MUSICAL/DOSE hook ====
+    // -- body: one function per view ----------------------------------------
+    const juce::Rectangle<int> body (kPad, kBodyTop, getWidth() - 2 * kPad, kBodyH);
+    if (simpleView) layoutSimple (body);
+    else            layoutFull (body);
 
-    // -- master row ----------------------------------------------------------
-    r.removeFromTop (kG);
-    auto master = r.removeFromTop (kMasterH).reduced (kPad, 0);
-    pulse.setBounds (master.removeFromLeft (272).reduced (0, kG));
-    master.removeFromLeft (kPad);
+    // -- full-width rows under the body: capture shelf, history -------------
+    int y = body.getBottom() + kG;
+    capturePanel.setBounds (kPad, y, body.getWidth(), kCaptureH);    // UNDO/CAPTURE hook
+    y += kCaptureH + kG;
+    history.setBounds (kPad, y, body.getWidth(), kHistoryH);
 
-    auto place = [&] (VsxSlider* s, int w) { s->setBounds (master.removeFromLeft (w)); };
-    place (kChaos, 88);
-    master.removeFromLeft (kG);
-    for (auto* s : { kPull, kSwing, kDryWet, kTrig, kReinj, kAnalys, kMorph })
-        place (s, 76);
-
-    // Three captioned combos. Each caption is painted 13px above its combo,
-    // so every row reserves that band rather than letting the next combo
-    // cover it. SC AMT sits beside the lower two rows.
-    auto col2 = master.withTrimmedLeft (kG);
-    const int rowH = metric::buttonH - 4, capH = 14, gap = 2;
-    col2 = col2.withSizeKeepingCentre (col2.getWidth(), 3 * (capH + rowH) + 2 * gap);
-    col2.removeFromTop (capH);
-    cGrid->setBounds (col2.removeFromTop (rowH));
-    col2.removeFromTop (gap);
-    kScAmt->setBounds (col2.removeFromRight (60));
-    col2.removeFromRight (kG / 2);
-    col2.removeFromTop (capH);
-    cSource->setBounds (col2.removeFromTop (rowH));
-    col2.removeFromTop (gap + capH);
-    cScMode->setBounds (col2.removeFromTop (rowH));
-
-    // -- i/o row -------------------------------------------------------------
-    r.removeFromTop (kG);
-    auto io = r.removeFromTop (kIoH).reduced (kPad, 0);
-    cBuffer->setBounds (io.removeFromLeft (160).withSizeKeepingCentre (160, metric::buttonH));
-    io.removeFromLeft (kPad);
-    for (auto* s : { kInTrim, kOutTrim, kDecayT })
+    // MUSICAL/DOSE hook: the first-run hint rides on the monitor's lower edge
+    // (two lines of text; it is a dismissable overlay on a display, not on a control).
     {
-        s->setBounds (io.removeFromLeft (76));
-        io.removeFromLeft (kG / 2);
+        auto m = monitor.getBounds();
+        hintStrip->setBounds (m.removeFromBottom (40).reduced (kG, kF));
+        hintStrip->toFront (false);
     }
-    io.removeFromLeft (kPad);
-    // ==== MUSICAL/DOSE hook ==== DOSE + Scale Lock take the right end of the I/O row
-    {
-        const int musicalW = 88 + kG + ScaleLockPanel::preferredWidth;
-        const int meterW = juce::jmax (120, juce::jmin (320, io.getWidth() - musicalW - kPad));
-        meter.setBounds (io.removeFromLeft (meterW).withSizeKeepingCentre (meterW, 48));
-        io.removeFromLeft (kPad);
-        dosePanel->setBounds (io.removeFromLeft (88));
-        io.removeFromLeft (kG);
-        scalePanel->setBounds (io.removeFromLeft (ScaleLockPanel::preferredWidth));
-    }
-    // ==== end MUSICAL/DOSE hook ====
-
-    // -- surgeons ------------------------------------------------------------
-    r.removeFromTop (kG);
-    auto stripArea = r.removeFromTop (kNumSurgeons * kStripH).reduced (kPad, 0);
-    for (auto* st : strips)
-        st->setBounds (stripArea.removeFromTop (kStripH));
-
-    // -- action buttons ------------------------------------------------------
-    r.removeFromTop (kG);
-    auto btnRow = r.removeFromTop (kBtnRowH).reduced (kPad, 0);
-    auto pb = [&] (juce::Component* c, int w)
-    {
-        c->setBounds (btnRow.removeFromLeft (w).withSizeKeepingCentre (w, metric::buttonH + 4));
-        btnRow.removeFromLeft (kG);
-    };
-    pb (&randomBtn, 96);
-    pb (&mutateBtn, 88);
-    kMutationAmt->setBounds (btnRow.removeFromLeft (72).withSizeKeepingCentre (72, kBtnRowH));
-    btnRow.removeFromLeft (kG / 2);
-    pb (&resetBtn, 88);
-    pb (bMidi, 112);
-    pb (bPanic, 128);
-    pb (bDecay, 152);
-    pb (bScar, 72);
-    kScarDrive->setBounds (btnRow.removeFromLeft (64));
-    btnRow.removeFromLeft (kG / 2);
-    kScarMix->setBounds (btnRow.removeFromLeft (64));
-    saveBtn.setBounds (btnRow.removeFromRight (136).withSizeKeepingCentre (136, metric::buttonH + 4));
-
-    // -- modulation ----------------------------------------------------------
-    r.removeFromTop (kG + kSectionH);         // header band, painted in paint()
-    auto modHead = r.removeFromTop (kModHeadH - kG).reduced (kPad, 0);
-    auto ph = [&] (VsxSlider* s) { s->setBounds (modHead.removeFromLeft (76)); modHead.removeFromLeft (kG / 2); };
-    auto pc = [&] (VsxComboBox* c)
-    {
-        c->setBounds (modHead.removeFromLeft (96).withSizeKeepingCentre (96, metric::buttonH - 4));
-        modHead.removeFromLeft (kPad);
-    };
-    const int modHeadTop = modHead.getY();
-    ph (kL1r); pc (cL1s); ph (kL2r); pc (cL2s); ph (kMac1); ph (kMac2);
-    const int headFreeX = modHead.getX();          // whatever the macros did not use
-
-    auto mod = r.removeFromTop (kNumModSlots * kModRowH).reduced (kPad, 0);
-    const int modBottom = mod.getBottom();
-    int slotFreeX = mod.getRight();
-    for (int m = 0; m < kNumModSlots; ++m)
-    {
-        auto row = mod.removeFromTop (kModRowH);
-        mmSrc[m]->setBounds (row.removeFromLeft (144).withSizeKeepingCentre (144, metric::buttonH - 6));
-        row.removeFromLeft (kG);
-        mmDst[m]->setBounds (row.removeFromLeft (160).withSizeKeepingCentre (160, metric::buttonH - 6));
-        row.removeFromLeft (kG);
-        const int dw = juce::jmin (360, row.getWidth());
-        mmDepth[m]->setBounds (row.removeFromLeft (dw).withSizeKeepingCentre (dw, 20));
-        slotFreeX = juce::jmin (slotFreeX, row.getX());
-    }
-
-    // The feed takes the rectangle both the macro row and the slot rows leave
-    // clear, so it can never overlap a control however the layout is retuned.
-    // If that gap is too small to be worth it, the spec says drop the feed.
-    // ==== EFFECTS PANEL hook ====
-    // Provisional rectangle: right-hand end of the mod-matrix block. The
-    // integration pass owns the final placement.
-    {
-        const int ew = vsx::EffectsPanel::preferredWidth, eh = vsx::EffectsPanel::preferredHeight;
-        effectsPanel.setBounds (getWidth() - kPad - ew, modHeadTop, ew, eh);
-    }
-    // ==== END EFFECTS PANEL hook ====
-    {
-        const int x = juce::jmax (headFreeX, slotFreeX) + kG;
-        const int w = effectsPanel.getX() - kG - x;
-        const int hgt = modBottom - modHeadTop;
-        const bool worthIt = w >= 220 && hgt >= 60;
-        stream.setVisible (worthIt && ! simpleView);       // MUSICAL/DOSE hook
-        if (worthIt)
-            stream.setBounds (x, modHeadTop, w, hgt);
-    }
-
-    // -- history -------------------------------------------------------------
-    r.removeFromTop (kG);
-    history.setBounds (r.removeFromTop (kHistoryH).reduced (kPad, 0));
-
-    // ==== UNDO/CAPTURE hook ====
-    r.removeFromTop (kG);
-    capturePanel.setBounds (r.removeFromTop (kCaptureH).reduced (kPad, 0));
-    // ==== end UNDO/CAPTURE hook ====
 
     // The secret panel slides out from the corner it lives behind.
     if (secret.isVisible())
     {
         const int w = 300, hgt = 116;
         const float t = secret.openAmount();
-        const int y = (int) (-hgt + (kHeaderH + 4 + hgt) * t);
-        secret.setBounds (kPad, y, w, hgt);
+        const int sy = (int) (-hgt + (kHeaderH + 4 + hgt) * t);
+        secret.setBounds (kPad, sy, w, hgt);
     }
 
     if (help.isVisible())    help.setBounds (getLocalBounds());
     if (options.isVisible()) options.setBounds (getLocalBounds());
     if (debug.isVisible())   debug.setBounds (getLocalBounds());
 }
+
+// ---------------------------------------------------------------------------
+void VivisectView::layoutFull (juce::Rectangle<int> body)
+{
+    auto L = body.removeFromLeft (kColL);
+    const int leftEdge = L.getRight();
+    body.removeFromLeft (kColGap);
+    auto R = body;
+
+    // ======================= LEFT : rack, modulation, actions ===============
+    headers.push_back ({ "SURGEONS", {}, L.removeFromTop (kSectionH) });
+    for (auto* st : strips)
+        st->setBounds (L.removeFromTop (kStripH));
+    L.removeFromTop (kG);
+
+    headers.push_back ({ "MODULATION",
+                         "MIDI notes C3-F3 trigger surgeons 1-6  -  right-click any control to map, reset or type a value",
+                         L.removeFromTop (kSectionH) });
+    auto modHead = L.removeFromTop (kModHeadH);
+    int x = modHead.getX();
+    {
+        auto put  = [&] (VsxSlider* k) { k->setBounds (x, modHead.getY(), 64, kModHeadH); x += 64 + kF; };
+        auto putC = [&] (VsxComboBox* c)
+        {
+            c->setBounds (x, modHead.getY() + (kModHeadH - kComboH) / 2, 80, kComboH);
+            x += 80 + kPad;
+        };
+        put (kL1r); putC (cL1s); put (kL2r); putC (cL2s); put (kMac1); put (kMac2);
+    }
+    const int headRight = x - kF;
+    auto mod = L.removeFromTop (kNumModSlots * kModRowH);
+    const int modTop = modHead.getY(), modBottom = mod.getBottom();
+    int rowsRight = mod.getX();
+    for (int m = 0; m < kNumModSlots; ++m)
+    {
+        auto row = mod.removeFromTop (kModRowH);
+        mmSrc[m]->setBounds (row.removeFromLeft (128).withSizeKeepingCentre (128, kComboH - 2));
+        row.removeFromLeft (kG);
+        mmDst[m]->setBounds (row.removeFromLeft (144).withSizeKeepingCentre (144, kComboH - 2));
+        row.removeFromLeft (kG);
+        mmDepth[m]->setBounds (row.removeFromLeft (160).withSizeKeepingCentre (160, 20));
+        rowsRight = row.getX();
+    }
+
+    // The feed takes the block to the right of both the macro row and the slot
+    // rows, so it can never overlap a control however the layout is retuned.
+    // If that gap is too small to be worth it, the spec says drop the feed.
+    {
+        const int sx = juce::jmax (headRight, rowsRight) + kG;
+        const int sw = leftEdge - sx, sh = modBottom - modTop;
+        const bool worthIt = sw >= 220 && sh >= 60;
+        stream.setVisible (worthIt);
+        if (worthIt)
+            stream.setBounds (sx, modTop, sw, sh);
+    }
+
+    L.removeFromTop (kG);
+    {
+        auto row = L;      // kActionH tall
+        saveBtn.setBounds (row.removeFromRight (152).withSizeKeepingCentre (152, kBtnH));
+        auto bt = [&] (juce::Component* c, int w)
+        {
+            c->setBounds (row.removeFromLeft (w).withSizeKeepingCentre (w, kBtnH));
+            row.removeFromLeft (kG);
+        };
+        bt (&randomBtn, 120);
+        bt (&mutateBtn, 112);
+        kMutationAmt->setBounds (row.removeFromLeft (80).withSizeKeepingCentre (80, kSmallKnobH));
+        row.removeFromLeft (kG);
+        bt (&resetBtn, 104);
+    }
+
+    // ======================= RIGHT : monitor, master, I/O, post-rack ========
+    constexpr int kPostH = 136, kScaleH = 72, kPulseH = 40;
+    constexpr int fixedR = kG + kPulseH + kG + kSectionH + kLargeKnobH + kG + kSmallKnobH + kG + kSmallKnobH
+                         + kG + kBtnH + kG + kSectionH + kPostH + kG + kScaleH;
+    monitor.setBounds (R.removeFromTop (kBodyH - fixedR));
+    R.removeFromTop (kG);
+    pulse.setBounds (R.removeFromTop (kPulseH));
+    R.removeFromTop (kG);
+
+    headers.push_back ({ "MASTER", {}, R.removeFromTop (kSectionH) });
+    {
+        // two large knobs and five normal ones, equal gaps
+        justify (R.removeFromTop (kLargeKnobH),
+                 { { kChaos, 80 }, { dosePanel.get(), 80 }, { kPull, 64 }, { kSwing, 64 },
+                   { kDryWet, 64 }, { kTrig, 64 }, { kReinj, 64 } }, kLargeKnobH);
+        for (auto* s : { kPull, kSwing, kDryWet, kTrig, kReinj })
+            resize (s, s->getWidth(), 12 + 62 + 12);
+    }
+    R.removeFromTop (kG);
+    {
+        // combo captions are painted 13px above each combo
+        justify (R.removeFromTop (kSmallKnobH),
+                 { { cGrid, 112 }, { cSource, 128 }, { cScMode, 128 }, { kScAmt, 64 },
+                   { kAnalys, 72 }, { kMorph, 72 } }, kSmallKnobH);
+        for (auto* c : { cGrid, cSource, cScMode })
+            resize (c, c->getWidth(), kComboH, 1);
+    }
+    R.removeFromTop (kG);
+    {
+        auto row = R.removeFromTop (kSmallKnobH);
+        cBuffer->setBounds (row.removeFromLeft (120).withSizeKeepingCentre (120, kComboH).translated (0, 1));
+        row.removeFromLeft (kG);
+        for (auto* s : { kInTrim, kOutTrim, kDecayT })
+        {
+            s->setBounds (row.removeFromLeft (64));
+            row.removeFromLeft (kF);
+        }
+        row.removeFromLeft (kG);
+        meter.setBounds (row.withSizeKeepingCentre (row.getWidth(), 48));
+    }
+    R.removeFromTop (kG);
+    justify (R.removeFromTop (kBtnH), { { bMidi, 160 }, { bPanic, 176 }, { bDecay, 200 } }, kBtnH);
+    R.removeFromTop (kG);
+
+    headers.push_back ({ "POST-RACK", "SCAR, then TOURNIQUET, then CLOT", R.removeFromTop (kSectionH) });
+    {
+        auto row = R.removeFromTop (kPostH);
+        auto scar = row.removeFromLeft (124);
+        row.removeFromLeft (kG);
+        effectsPanel.setBounds (row);
+        auto sc = scar.withSizeKeepingCentre (scar.getWidth(), kComboH + kF + kSmallKnobH);
+        bScar->setBounds (sc.removeFromTop (kComboH));
+        sc.removeFromTop (kF);
+        kScarDrive->setBounds (sc.removeFromLeft (60));
+        kScarMix->setBounds (sc.removeFromRight (60));
+    }
+    R.removeFromTop (kG);
+    scalePanel->setBounds (R.removeFromTop (kScaleH));
+}
+
+// ---------------------------------------------------------------------------
+void VivisectView::layoutSimple (juce::Rectangle<int> body)
+{
+    auto L = body.removeFromLeft (kSimpleColL);
+    body.removeFromLeft (kColGap);
+    auto R = body;
+
+    // ======================= LEFT : the six surgeons, ON + MIX ==============
+    headers.push_back ({ "SURGEONS", {}, L.removeFromTop (kSectionH) });
+    const int sh = L.getHeight() / kNumSurgeons;
+    for (int i = 0; i < kNumSurgeons; ++i)
+        strips[i]->setBounds (i == kNumSurgeons - 1 ? L : L.removeFromTop (sh));
+
+    // ======================= RIGHT : monitor, master, actions ===============
+    constexpr int kPulseH = 40;
+    constexpr int fixedR = kG + kPulseH + kG + kSectionH + kLargeKnobH + kG + kActionH;
+    monitor.setBounds (R.removeFromTop (kBodyH - fixedR));
+    R.removeFromTop (kG);
+    pulse.setBounds (R.removeFromTop (kPulseH));
+    R.removeFromTop (kG);
+
+    headers.push_back ({ "MASTER", {}, R.removeFromTop (kSectionH) });
+    justify (R.removeFromTop (kLargeKnobH),
+             { { kChaos, 80 }, { dosePanel.get(), 80 }, { kPull, 64 }, { kDryWet, 64 },
+               { cSource, 200 }, { &scaleToggle, 88 }, { &meter, 220 } }, kLargeKnobH);
+    for (auto* s : { kPull, kDryWet })
+        resize (s, s->getWidth(), 12 + 62 + 12);
+    resize (cSource, 200, kComboH, 1);
+    resize (&scaleToggle, 88, kBtnH);
+    resize (&meter, 220, 48);
+
+    R.removeFromTop (kG);
+    justify (R.removeFromTop (kActionH),
+             { { &randomBtn, 160 }, { &mutateBtn, 152 }, { kMutationAmt, 80 },
+               { &resetBtn, 128 }, { &saveBtn, 184 } }, kBtnH);
+    resize (kMutationAmt, 80, kSmallKnobH);
+}
+
+// ==== MUSICAL/DOSE hook ====
+void VivisectView::applySimpleView (bool simple)
+{
+    simpleView = simple;
+    simpleBtn->setSimple (simple);
+
+    // The one place that lists what Simple view hides: everything outside F4's
+    // list (Dose, Chaos, Gravity, Dry/Wet, surgeon On/Mix, source, presets,
+    // RANDOM / MUTATE / UNDO / REDO / CAPTURE). Null is skipped.
+    const juce::Array<juce::Component*> hidden {
+        // mod matrix and the data stream (resized() decides whether the stream fits)
+        kL1r, kL2r, kMac1, kMac2, cL1s, cL2s, &stream,
+        mmSrc[0], mmSrc[1], mmSrc[2], mmSrc[3], mmDst[0], mmDst[1], mmDst[2], mmDst[3],
+        mmDepth[0], mmDepth[1], mmDepth[2], mmDepth[3],
+        // sidechain
+        cScMode, kScAmt,
+        // master detail
+        kSwing, kTrig, kReinj, kAnalys, kMorph, cGrid,
+        // I/O and utility
+        cBuffer, kInTrim, kOutTrim, kDecayT, bMidi, bPanic, bDecay,
+        // post-rack effects
+        bScar, kScarDrive, kScarMix, &effectsPanel,
+        // musical detail
+        scalePanel.get()
+    };
+    for (auto* c : hidden)
+        if (c != nullptr) c->setVisible (! simple);
+    scaleToggle.setVisible (simple);
+    for (auto* st : strips) st->setSimple (simple);      // PROB, parameter knobs and routing
+    resized();      // re-flows the whole window for the chosen view
+    repaint();
+}
+// ==== end MUSICAL/DOSE hook ====
 
 // ===========================================================================
 int VivisectView::designWidth() noexcept  { return kW; }

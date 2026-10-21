@@ -207,6 +207,9 @@ public:
     void paint (juce::Graphics&) override;
     // ==== MUSICAL (F4) ==== Simple view hides the routing combo only
     void setRouteVisible (bool v) { route.setVisible (v); }
+    // Simple view: only the ON toggle and MIX stay; PROB, the three parameter knobs,
+    // Route In and Route Amt are hidden (they keep working) and the rest re-centres.
+    void setSimple (bool simple);
     // ==== end MUSICAL (F4) ====
 private:
     void timerCallback() override;
@@ -215,6 +218,7 @@ private:
     using CA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
     int idx;
+    bool simpleMode = false;
     std::function<float()> getActivity;
     float act = 0.f;
     VsxToggle onBtn;

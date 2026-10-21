@@ -172,6 +172,10 @@ std::map<String, float> snapshotParams (VivisectProcessor& p)
 #include "TestsRouting.inc"
 #define VSX_HAVE_ROUTING_TESTS 1
 #endif
+#if __has_include("TestsLayout.inc")
+#include "TestsLayout.inc"
+#define VSX_HAVE_LAYOUT_TESTS 1
+#endif
 
 int main()
 {
@@ -1581,6 +1585,9 @@ int main()
 #endif
 #ifdef VSX_HAVE_ROUTING_TESTS
     run_routing_tests (kRate, kBlock);
+#endif
+#ifdef VSX_HAVE_LAYOUT_TESTS
+    run_layout_tests (kRate, kBlock);
 #endif
 
     std::printf ("\n=====================\n%d checks, %d failed\n", checksRun, checksFailed);

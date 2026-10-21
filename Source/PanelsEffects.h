@@ -20,8 +20,8 @@ public:
     void resized() override;
 
     // Suggested size; the host view may give the panel any rectangle >= this.
-    static constexpr int preferredWidth  = 460;
-    static constexpr int preferredHeight = 128;
+    static constexpr int preferredWidth  = 480;
+    static constexpr int preferredHeight = 136;
 
 private:
     void timerCallback() override;

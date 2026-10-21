@@ -79,6 +79,13 @@ private:
     // ==== MUSICAL/DOSE hook ====
     // Simple view: pure visibility. Nothing is reset and no parameter changes.
     void applySimpleView (bool simple);
+    // Layout: one function per view so neither leaves holes (see resized()).
+    void layoutFull (juce::Rectangle<int> body);
+    void layoutSimple (juce::Rectangle<int> body);
+    struct SectionHeader { juce::String text, hint; juce::Rectangle<int> area; };
+    std::vector<SectionHeader> headers;
+    vsx::VsxButton scaleToggle { "SCALE", this, vsx::id::scaleOn };   // Simple view's compact Scale Lock ON
+    std::unique_ptr<BA> scaleToggleA;
     std::unique_ptr<vsx::ScaleLockPanel>   scalePanel;
     std::unique_ptr<vsx::DosePanel>        dosePanel;
     std::unique_ptr<vsx::SimpleViewButton> simpleBtn;

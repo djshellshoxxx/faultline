@@ -43,7 +43,7 @@ void ScaleLockPanel::resized()
     auto combos = r.withSizeKeepingCentre (r.getWidth(), 2 * 14 + metric::buttonH - 4);
     // captions are painted 13px above each combo
     combos.removeFromTop (14);
-    auto rootArea = combos.removeFromLeft (juce::jmin (64, combos.getWidth() / 3));
+    auto rootArea = combos.removeFromLeft (juce::jmin (88, combos.getWidth() / 3));
     root.setBounds (rootArea.removeFromTop (metric::buttonH - 4));
     combos.removeFromLeft (metric::gridFine);
     type.setBounds (combos.removeFromTop (metric::buttonH - 4));
@@ -105,7 +105,8 @@ void FirstRunHint::paint (juce::Graphics& g)
     g.drawRoundedRectangle (b.reduced (0.5f), (float) metric::radiusPanel, 1.f);
     g.setColour (col::text);
     g.setFont (font::ui (11.f));
-    g.drawText (hintText(), getLocalBounds().withTrimmedLeft (metric::pad).withTrimmedRight (96),
-                juce::Justification::centredLeft);
+    g.drawFittedText (hintText(), getLocalBounds().withTrimmedLeft (metric::grid + metric::gridFine)
+                                                  .withTrimmedRight (96).reduced (0, 2),
+                      juce::Justification::centredLeft, 2, 1.f);
 }
 } // namespace vsx
