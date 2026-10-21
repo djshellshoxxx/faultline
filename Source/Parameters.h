@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <array>
 #include <memory>
 
 // ============================================================================
@@ -38,6 +39,24 @@ namespace id
     constexpr auto scarOn          = "scarOn";
     constexpr auto scarDrive       = "scarDrive";
     constexpr auto scarMix         = "scarMix";
+
+    // ==== EFFECTS (E1/E2) ====
+    // TOURNIQUET (resonant filter) and CLOT (tempo-synced stereo delay):
+    // post-rack effects, SCAR -> TOURNIQUET -> CLOT -> FLATLINE.
+    constexpr auto tqOn            = "tqOn";
+    constexpr auto tqMode          = "tqMode";
+    constexpr auto tqCutoff        = "tqCutoff";
+    constexpr auto tqRes           = "tqRes";
+    constexpr auto tqEnv           = "tqEnv";
+    constexpr auto tqMix           = "tqMix";
+    constexpr auto clotOn          = "clotOn";
+    constexpr auto clotTime        = "clotTime";
+    constexpr auto clotFree        = "clotFree";
+    constexpr auto clotFeedback    = "clotFeedback";
+    constexpr auto clotTone        = "clotTone";
+    constexpr auto clotSpread      = "clotSpread";
+    constexpr auto clotMix         = "clotMix";
+    // ==== END EFFECTS (E1/E2) ====
 
     // --- FLATLINE: the hidden effect behind the corner notch ----------------
     constexpr auto flatOn         = "flatOn";
@@ -110,8 +129,25 @@ inline juce::StringArray modSourceNames()
 inline juce::StringArray modDestNames()
 {
     return { "Off", "Chaos", "Grav Pull", "Swing", "Trig Rate", "Reinject", "Morph",
-             "St Drift", "Gr Density", "Gr Spray", "Cr Bits", "Cr Rate", "Fz Blur" };
+             "St Drift", "Gr Density", "Gr Spray", "Cr Bits", "Cr Rate", "Fz Blur",
+             // ==== EFFECTS (E1/E2) ==== appended last so saved indices never move
+             "TQ Cutoff", "TQ Resonance", "Clot Feedback", "Clot Mix" };
 }
+
+// ==== EFFECTS (E1/E2) ====
+// Mod destination enums (indices into modDestNames()) for the effect stages.
+enum EffectsModDest { MD_TQ_CUTOFF = 13, MD_TQ_RES = 14, MD_CLOT_FB = 15, MD_CLOT_MIX = 16 };
+
+// Every effect parameter, for RANDOM / MUTATE / state-upgrade loops.
+inline const std::array<const char*, 13>& effectsParamIds()
+{
+    static const std::array<const char*, 13> ids {
+        id::tqOn, id::tqMode, id::tqCutoff, id::tqRes, id::tqEnv, id::tqMix,
+        id::clotOn, id::clotTime, id::clotFree, id::clotFeedback, id::clotTone,
+        id::clotSpread, id::clotMix };
+    return ids;
+}
+// ==== END EFFECTS (E1/E2) ====
 
 // ----------------------------------------------------------------------------
 inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
@@ -189,6 +225,26 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         p.add (std::make_unique<F> (pid ((pre + "depth").toRawUTF8()), "Mod " + juce::String (m + 1) + " Depth",
             juce::NormalisableRange<float> { -1.f, 1.f, 0.0001f }, 0.f));
     }
+
+    // ==== EFFECTS (E1/E2) ====
+    // Appended after everything else so existing parameter indices never shift.
+    p.add (std::make_unique<B> (pid (id::tqOn), "Tourniquet", false));
+    p.add (std::make_unique<C> (pid (id::tqMode), "TQ Mode",
+        juce::StringArray { "Low-pass", "Band-pass", "High-pass", "Notch" }, 0));
+    p.add (std::make_unique<F> (pid (id::tqCutoff), "TQ Cutoff", R { 20.f, 20000.f, 0.01f, 0.3f }, 1200.f));
+    p.add (std::make_unique<F> (pid (id::tqRes), "TQ Resonance", R { 0.f, 1.f, 0.0001f }, 0.25f));
+    p.add (std::make_unique<F> (pid (id::tqEnv), "TQ Env", R { -1.f, 1.f, 0.0001f }, 0.f));
+    p.add (std::make_unique<F> (pid (id::tqMix), "TQ Mix", R { 0.f, 1.f, 0.0001f }, 1.f));
+
+    p.add (std::make_unique<B> (pid (id::clotOn), "Clot", false));
+    p.add (std::make_unique<C> (pid (id::clotTime), "Clot Time",
+        juce::StringArray { "1/16", "1/8T", "1/8", "1/8.", "1/4", "1/4.", "1/2", "1/1", "Free" }, 2));
+    p.add (std::make_unique<F> (pid (id::clotFree), "Clot Free", R { 20.f, 2000.f, 0.1f, 0.5f }, 375.f));
+    p.add (std::make_unique<F> (pid (id::clotFeedback), "Clot Feedback", R { 0.f, 0.95f, 0.0001f }, 0.45f));
+    p.add (std::make_unique<F> (pid (id::clotTone), "Clot Tone", R { 200.f, 16000.f, 0.1f, 0.3f }, 5000.f));
+    p.add (std::make_unique<F> (pid (id::clotSpread), "Clot Spread", R { 0.f, 1.f, 0.0001f }, 0.6f));
+    p.add (std::make_unique<F> (pid (id::clotMix), "Clot Mix", R { 0.f, 1.f, 0.0001f }, 0.3f));
+    // ==== END EFFECTS (E1/E2) ====
 
     return p;
 }

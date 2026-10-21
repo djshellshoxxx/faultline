@@ -34,7 +34,36 @@ VivisectProcessor::VivisectProcessor()
     for (auto& v : pendingCCValue) v.store (-1.f);
     for (auto& v : pendingCCParam) v.store (-1);
     seedDefaultMidiMap();
+
+    // ==== EFFECTS (E1/E2) ====
+    fxTqOn = fxRef (id::tqOn);           fxTqMode = fxRef (id::tqMode);
+    fxTqCutoff = fxRef (id::tqCutoff);   fxTqRes = fxRef (id::tqRes);
+    fxTqEnv = fxRef (id::tqEnv);         fxTqMix = fxRef (id::tqMix);
+    fxClotOn = fxRef (id::clotOn);       fxClotTime = fxRef (id::clotTime);
+    fxClotFree = fxRef (id::clotFree);   fxClotFeedback = fxRef (id::clotFeedback);
+    fxClotTone = fxRef (id::clotTone);   fxClotSpread = fxRef (id::clotSpread);
+    fxClotMix = fxRef (id::clotMix);
+    // ==== END EFFECTS (E1/E2) ====
 }
+
+// ==== EFFECTS (E1/E2) ====
+VivisectProcessor::FxRef VivisectProcessor::fxRef (const char* paramID) const
+{
+    FxRef r;
+    r.par = apvts.getParameter (paramID);
+    r.raw = apvts.getRawParameterValue (paramID);
+    return r;
+}
+
+// Base value plus the mod matrix offset, in the parameter's normalized space
+// (same behaviour as pvMod, without any string lookup).
+float VivisectProcessor::fxMod (const FxRef& r, int destEnum) const noexcept
+{
+    if (r.par == nullptr || r.raw == nullptr) return r.get();
+    const float base = r.par->convertTo0to1 (r.raw->load());
+    return r.par->convertFrom0to1 (juce::jlimit (0.f, 1.f, base + modMatrix.destOffset (destEnum)));
+}
+// ==== END EFFECTS (E1/E2) ====
 VivisectProcessor::~VivisectProcessor()
 {
     stopTimer();
@@ -60,6 +89,12 @@ void VivisectProcessor::prepareToPlay (double sr, int block)
     preparedBlock = block;
     scar.reset();
     scarWasOn = false;
+    // ==== EFFECTS (E1/E2) ====
+    tourniquet.prepare (sr);
+    tourniquetWasOn = false;
+    clot.prepare (sr);
+    clotWasOn = false;
+    // ==== END EFFECTS (E1/E2) ====
     flatline.prepare (sr, block);
     sampleRate = sr;
     specimen.prepare (sr, 45.0);
@@ -394,6 +429,35 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
         scar.reset();
         scarWasOn = false;
     }
+
+    // ==== EFFECTS (E1/E2) ====
+    // ---- TOURNIQUET (resonant filter) ---------------------------------
+    if (fxTqOn.get() > 0.5f)
+    {
+        tourniquet.process (workBuf, n, (int) fxTqMode.get(), fxMod (fxTqCutoff, MD_TQ_CUTOFF),
+                            fxMod (fxTqRes, MD_TQ_RES), fxTqEnv.get(), fxTqMix.get());
+        tourniquetWasOn = true;
+    }
+    else if (tourniquetWasOn)
+    {
+        tourniquet.reset();
+        tourniquetWasOn = false;
+    }
+
+    // ---- CLOT (tempo-synced stereo delay) -----------------------------
+    if (fxClotOn.get() > 0.5f)
+    {
+        clot.process (workBuf, n, spb, (int) fxClotTime.get(), fxClotFree.get(),
+                      fxMod (fxClotFeedback, MD_CLOT_FB), fxClotTone.get(), fxClotSpread.get(),
+                      fxMod (fxClotMix, MD_CLOT_MIX));
+        clotWasOn = true;
+    }
+    else if (clotWasOn)
+    {
+        clot.reset();
+        clotWasOn = false;
+    }
+    // ==== END EFFECTS (E1/E2) ====
 
     // ---- FLATLINE (hidden effect) ------------------------------------
     // Clearing the delay line is O(line length); do it once on the way out
@@ -831,7 +895,24 @@ void VivisectProcessor::restoreSoundState (const juce::ValueTree& source)
     if (currentSettings.isValid())
         next.addChild (currentSettings.createCopy(), -1, nullptr);
 
+    // ==== EFFECTS (E1/E2) ====
+    // Snapshots from before the effect stages existed carry no entry for
+    // them; load those at their defaults rather than leaving stale values.
+    juce::StringArray missingFx;
+    for (const char* fxId : effectsParamIds())
+    {
+        bool found = false;
+        for (int i = 0; i < next.getNumChildren() && ! found; ++i)
+            found = next.getChild (i).getProperty ("id").toString() == fxId;
+        if (! found) missingFx.add (fxId);
+    }
+    // ==== END EFFECTS (E1/E2) ====
+
     apvts.replaceState (next);
+
+    for (const auto& fxId : missingFx)
+        if (auto* rp = apvts.getParameter (fxId))
+            rp->setValueNotifyingHost (rp->getDefaultValue());
 }
 
 // ===========================================================================
@@ -1348,6 +1429,22 @@ void VivisectProcessor::randomizeAll()
     setNorm   (id::scarDrive,      rr (0.08f, 0.82f));
     setNorm   (id::scarMix,        rr (0.15f, 0.72f));
 
+    // ==== EFFECTS (E1/E2) ====
+    setNorm   (id::tqOn,           rng.nextFloat() < 0.30f ? 1.f : 0.f);
+    setChoice (id::tqMode,         rng.nextInt (4));
+    setNorm   (id::tqCutoff,       rr (0.25f, 0.85f));
+    setNorm   (id::tqRes,          rr (0.05f, 0.75f));
+    setNorm   (id::tqEnv,          rr (0.30f, 0.80f));
+    setNorm   (id::tqMix,          rr (0.60f, 1.f));
+    setNorm   (id::clotOn,         rng.nextFloat() < 0.30f ? 1.f : 0.f);
+    setChoice (id::clotTime,       rng.nextInt (9));
+    setNorm   (id::clotFree,       rr (0.10f, 0.80f));
+    setNorm   (id::clotFeedback,   rr (0.10f, 0.70f));
+    setNorm   (id::clotTone,       rr (0.35f, 0.90f));
+    setNorm   (id::clotSpread,     rr (0.f, 1.f));
+    setNorm   (id::clotMix,        rr (0.10f, 0.50f));
+    // ==== END EFFECTS (E1/E2) ====
+
     bool anyOn = false;
     juce::Array<int> eligibleOn;
     for (int s = 0; s < kNumSurgeons; ++s)
@@ -1431,9 +1528,14 @@ void VivisectProcessor::mutateCurrent()
     for (auto pid : { id::chaos, id::gravityPull, id::swing, id::dryWet,
                       id::triggerRate, id::reinject, id::analysisInform, id::morph,
                       id::scAmount, id::scarDrive, id::scarMix, id::lfo1Rate,
-                      id::lfo2Rate, id::macro1, id::macro2 })
+                      id::lfo2Rate, id::macro1, id::macro2,
+                      // ==== EFFECTS (E1/E2) ====
+                      id::tqCutoff, id::tqRes, id::tqEnv, id::tqMix,
+                      id::clotFree, id::clotFeedback, id::clotTone, id::clotSpread, id::clotMix })
         mutateContinuous (pid);
 
+    mutateChoice (id::tqMode);        // ==== EFFECTS (E1/E2) ====
+    mutateChoice (id::clotTime);
     mutateChoice (id::gravityGrid);
     mutateChoice (id::lfo1Shape);
     mutateChoice (id::lfo2Shape);
@@ -1474,10 +1576,12 @@ void VivisectProcessor::mutateCurrent()
         mutateContinuous (pre + "depth");
     }
 
-    if (amount >= 0.70f && ! isParameterLocked (id::scarOn)
-        && rng.nextFloat() < (amount - 0.70f) * 0.30f)
-        if (auto* p = apvts.getParameter (id::scarOn))
-            p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.f : 1.f);
+    // On/off switches (SCAR and the effect stages) flip only at high amounts.
+    for (auto onPid : { id::scarOn, id::tqOn, id::clotOn })     // ==== EFFECTS (E1/E2) ====
+        if (amount >= 0.70f && ! isParameterLocked (onPid)
+            && rng.nextFloat() < (amount - 0.70f) * 0.30f)
+            if (auto* p = apvts.getParameter (onPid))
+                p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.f : 1.f);
 }
 
 // ===========================================================================

@@ -5,6 +5,7 @@
 #include <vector>
 #include "PluginProcessor.h"
 #include "Ui.h"
+#include "PanelsEffects.h"   // ==== EFFECTS PANEL hook ====
 
 // The whole UI, laid out at a fixed design size. VivisectEditor below scales
 // it as one piece, which is how JUCE wants a zoomable editor built: the host
@@ -104,6 +105,7 @@ private:
     vsx::OptionsPanel options;
     vsx::DebugPanel   debug;
     vsx::SecretPanel  secret { *this };
+    vsx::EffectsPanel effectsPanel { *this };   // ==== EFFECTS PANEL hook ====
 
     // positioned individually in resized()
     vsx::VsxSlider *kChaos = nullptr, *kPull = nullptr, *kSwing = nullptr, *kDryWet = nullptr,

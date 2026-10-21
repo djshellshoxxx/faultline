@@ -183,6 +183,7 @@ VivisectView::VivisectView (VivisectProcessor& p)
     menuBtn.onClick = [this] { showMainMenu(); };
 
     addAndMakeVisible (led);
+    addAndMakeVisible (effectsPanel);   // ==== EFFECTS PANEL hook ====
 
     // The specimen feed lives in the dead space beside the mod matrix. It is
     // decorative, so it must never steal a click or a tooltip from a control.
@@ -827,9 +828,17 @@ void VivisectView::resized()
     // The feed takes the rectangle both the macro row and the slot rows leave
     // clear, so it can never overlap a control however the layout is retuned.
     // If that gap is too small to be worth it, the spec says drop the feed.
+    // ==== EFFECTS PANEL hook ====
+    // Provisional rectangle: right-hand end of the mod-matrix block. The
+    // integration pass owns the final placement.
+    {
+        const int ew = vsx::EffectsPanel::preferredWidth, eh = vsx::EffectsPanel::preferredHeight;
+        effectsPanel.setBounds (getWidth() - kPad - ew, modHeadTop, ew, eh);
+    }
+    // ==== END EFFECTS PANEL hook ====
     {
         const int x = juce::jmax (headFreeX, slotFreeX) + kG;
-        const int w = getWidth() - kPad - x;
+        const int w = effectsPanel.getX() - kG - x;
         const int hgt = modBottom - modHeadTop;
         const bool worthIt = w >= 220 && hgt >= 60;
         stream.setVisible (worthIt);
