@@ -2,11 +2,15 @@
 #include <JuceHeader.h>
 #include <array>
 #include <atomic>
+#include <deque>
 #include <map>
 #include <memory>
+#include <optional>
+#include <vector>
 #include "Parameters.h"
 #include "Dsp.h"
 #include "Effects.h"
+#include "Capture.h"
 
 // ============================================================================
 //  VIVISECT — sample butchery. See README.md.
@@ -135,6 +139,40 @@ public:
     int  currentABSlot() const { return abSlot; }
     void copyABSlot();                       // current slot -> the other one
 
+    // -- undo / redo (F1) -----------------------------------------------------
+    //  Sound parameters only (the same scope as A/B): never VSX_SETTINGS, locks,
+    //  MIDI maps, samples or presets on disk. Message thread only.
+    //  pushUndoSnapshot() records the CURRENT state as an undo step and clears
+    //  redo; call it just before a change. RANDOM, MUTATE, RESET, preset load,
+    //  A/B swap and history rewind do this themselves (once each); UI gestures
+    //  are coalesced through the parameter listener. Host automation is not
+    //  recorded.
+    static constexpr int kUndoDepth = 100;
+    void pushUndoSnapshot();
+    bool undo();
+    bool redo();
+    bool canUndo() const;
+    bool canRedo() const;
+    void clearUndoHistory();
+    int  undoDepth() const;
+    int  redoDepth() const;
+    juce::String undoLabel() const;          // e.g. "Undo: Chaos 0.40 -> 0.12"
+    juce::String redoLabel() const;
+
+    // -- capture and drag-out (F3) --------------------------------------------
+    //  Records the final post-FX output (1/2/4/8 bars). Playing hosts start on
+    //  the next bar line; standalone or stopped starts at once. The take is
+    //  written to <user data>/Captures/ by a background thread.
+    bool startCapture (int bars);
+    void cancelCapture();
+    vsx::CaptureInfo captureState() const { return capture.info(); }
+    juce::Array<juce::File> listCaptures (int maxCount = 0) const { return capture.list (maxCount); }
+    int  captureBars() const;                // user setting (VSX_SETTINGS): 1, 2, 4 or 8
+    void setCaptureBars (int bars);
+    juce::File captureDirectory() const { return capture.directory(); }
+    void setCaptureDirectory (const juce::File& d) { capture.setDirectory (d); }
+    vsx::CaptureEngine& captureEngine() noexcept { return capture; }
+
     // -- options ------------------------------------------------------------
     bool tooltipsEnabled() const;
     void setTooltipsEnabled (bool);
@@ -230,6 +268,43 @@ private:
     std::array<std::atomic<float>, 128> pendingCCValue;   // < 0 = nothing queued
     std::array<std::atomic<int>, 128>   pendingCCParam;
     int timerTicks = 0;
+
+    // undo / redo
+    struct UndoSnapshot
+    {
+        std::vector<float> norm;          // exact normalised value of every parameter
+        juce::ValueTree    tree;          // sound state, VSX_SETTINGS excluded
+    };
+    struct UndoGestureListener : public juce::AudioProcessorParameter::Listener
+    {
+        explicit UndoGestureListener (VivisectProcessor& o) : owner (o) {}
+        void parameterValueChanged (int, float) override {}
+        void parameterGestureChanged (int, bool starting) override;
+        VivisectProcessor& owner;
+    };
+    struct UndoScope
+    {
+        explicit UndoScope (VivisectProcessor& p) : owner (p)
+        {
+            if (owner.undoScopeDepth++ == 0) owner.pushUndoSnapshot();
+        }
+        ~UndoScope() { --owner.undoScopeDepth; }
+        VivisectProcessor& owner;
+    };
+    UndoSnapshot captureUndoSnapshot();
+    std::vector<float> currentNormalised() const;
+    void applyUndoSnapshot (const UndoSnapshot&);
+    juce::String describeUndoStep (const UndoSnapshot& target, const char* verb) const;
+    std::deque<UndoSnapshot> undoStack, redoStack;
+    mutable juce::CriticalSection undoLock;
+    UndoGestureListener undoListener { *this };
+    int undoScopeDepth = 0;                // > 0 while an action or an undo is applying
+    int gestureDepth = 0;
+    std::optional<UndoSnapshot> gestureStart;
+
+    // capture
+    vsx::CaptureEngine capture;
+    int chunkSampleOffset = 0;             // position of the current chunk inside an oversized host block
 
     // A/B compare
     juce::ValueTree abState[2];

@@ -44,6 +44,9 @@ VivisectProcessor::VivisectProcessor()
     fxClotTone = fxRef (id::clotTone);   fxClotSpread = fxRef (id::clotSpread);
     fxClotMix = fxRef (id::clotMix);
     // ==== END EFFECTS (E1/E2) ====
+    capture.setDirectory (vsx::userCapturesDir());
+    for (auto* prm : getParameters())
+        prm->addListener (&undoListener);       // F1: UI gestures coalesce into one undo step
 }
 
 // ==== EFFECTS (E1/E2) ====
@@ -66,7 +69,10 @@ float VivisectProcessor::fxMod (const FxRef& r, int destEnum) const noexcept
 // ==== END EFFECTS (E1/E2) ====
 VivisectProcessor::~VivisectProcessor()
 {
+    for (auto* prm : getParameters())
+        prm->removeListener (&undoListener);
     stopTimer();
+    capture.shutdown();                         // F3: join the writer before anything it reads goes away
     // The crash handler is process-wide and points into this binary. Leaving it
     // installed after the host unloads the plug-in would turn the next host
     // crash into a jump into freed code.
@@ -97,6 +103,7 @@ void VivisectProcessor::prepareToPlay (double sr, int block)
     // ==== END EFFECTS (E1/E2) ====
     flatline.prepare (sr, block);
     sampleRate = sr;
+    capture.prepare (sr);                       // F3: allocate the take buffer here, never on the audio thread
     specimen.prepare (sr, 45.0);
     analysis.prepare (sr);
     rack.prepare (sr, block);
@@ -172,11 +179,14 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         {
             const int len = juce::jmin (preparedBlock, total - off);
             juce::AudioBuffer<float> chunk (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), off, len);
+            chunkSampleOffset = off;
             processChunk (chunk, off == 0 ? midi : emptyMidi);
             emptyMidi.clear();
         }
+        chunkSampleOffset = 0;
         return;
     }
+    chunkSampleOffset = 0;
     processChunk (buffer, midi);
 }
 
@@ -256,12 +266,15 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     // ---- musical clock ----------------------------------------------------
     double bpm = lastBpm, ppq = 0.0;
     bool playing = false;
+    double barQuarters = 4.0;                       // capture: bar length in quarter notes
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
         {
             if (pos->getBpm())         bpm = *pos->getBpm();
             if (pos->getPpqPosition()) ppq = *pos->getPpqPosition();
             playing = pos->getIsPlaying();
+            if (auto ts = pos->getTimeSignature())
+                barQuarters = vsx::capture::barQuarters (ts->numerator, ts->denominator);
         }
     bpm = juce::jlimit (20.0, 300.0, bpm);
     lastBpm = bpm;
@@ -476,6 +489,17 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     main.copyFrom (0, 0, workBuf, 0, 0, n);
     if (mainCh > 1) main.copyFrom (1, 0, workBuf, 1, 0, n);
 
+    // ---- capture (F3): copy only; the file is written by a background thread
+    if (! isSuspended())
+    {
+        vsx::CaptureEngine::Clock cc;
+        cc.playing = playing;
+        cc.bpm = bpm;
+        cc.barQuarters = barQuarters;
+        cc.ppq = ppq + (double) chunkSampleOffset / spb;
+        capture.process (main.getReadPointer (0), main.getReadPointer (mainCh > 1 ? 1 : 0), n, cc);
+    }
+
     // ---- meters ----------------------------------------------
     for (int ch = 0; ch < 2; ++ch)
         outPeak[(size_t) ch].store (workBuf.getMagnitude (ch, 0, n));
@@ -595,6 +619,7 @@ void VivisectProcessor::rewindToNormalized (float x)
     if (s.isNotEmpty())
         if (auto xml = juce::XmlDocument::parse (s))
         {
+            UndoScope undoStep (*this);                 // F1: one step per rewind
             restoreSoundState (juce::ValueTree::fromXml (*xml));
         }
 }
@@ -652,6 +677,7 @@ juce::StringArray VivisectProcessor::getPresetNames() const
 }
 void VivisectProcessor::applyPresetMap (const std::map<juce::String, float>& m)
 {
+    UndoScope undoStep (*this);                         // F1: one step per preset load
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
             rp->setValueNotifyingHost (rp->getDefaultValue());
@@ -1225,6 +1251,9 @@ void VivisectProcessor::hardResetAllSettings()
         cache.deleteRecursively();
 
     lastPresetFile = juce::File();
+
+    // 6. a clean slate has nothing to undo back into (F1)
+    clearUndoHistory();
 }
 
 // ===========================================================================
@@ -1365,6 +1394,7 @@ void VivisectProcessor::clearParameterLocks()
 // ===========================================================================
 void VivisectProcessor::resetAllToDefaults()
 {
+    UndoScope undoStep (*this);                         // F1
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
             rp->setValueNotifyingHost (rp->getDefaultValue());
@@ -1373,6 +1403,7 @@ void VivisectProcessor::resetAllToDefaults()
 
 void VivisectProcessor::randomizeAll()
 {
+    UndoScope undoStep (*this);                         // F1
     // Utility and routing state are not part of the generated sound. Preserve
     // them when subsequent RANDOM presses reset the creative parameters first.
     std::map<juce::String, float> preserved;
@@ -1495,6 +1526,7 @@ void VivisectProcessor::mutateCurrent()
 {
     auto* amountParam = apvts.getParameter (id::mutationAmount);
     if (amountParam == nullptr) return;
+    UndoScope undoStep (*this);                         // F1
     const float amount = juce::jlimit (0.f, 1.f, amountParam->getValue());
     if (amount <= 0.f) return;
 
@@ -1592,6 +1624,7 @@ void VivisectProcessor::selectABSlot (int slot)
     slot = juce::jlimit (0, 1, slot);
     if (slot == abSlot) return;
 
+    UndoScope undoStep (*this);                         // F1: one step per A/B swap
     abState[abSlot] = soundStateSnapshot();        // park sonic state only
     if (abState[slot].isValid())
     {
@@ -1628,6 +1661,7 @@ bool VivisectProcessor::loadPresetFromFile (const juce::File& f)
     if (! f.existsAsFile()) return false;
     auto xml = juce::XmlDocument::parse (f);
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return false;
+    UndoScope undoStep (*this);                         // F1: one step per preset load
     restoreSoundState (juce::ValueTree::fromXml (*xml));
     lastPresetFile = f;
     return true;
@@ -1687,6 +1721,191 @@ bool VivisectProcessor::exportSpecimenToWav (const juce::File& f, int bitDepth,
         *secondsWritten = (double) n / juce::jmax (1.0, sr);
     return ok;
 }
+
+// ===========================================================================
+//  Undo / redo (F1)
+//
+//  Same scope as A/B: sound parameters only. Each snapshot keeps the exact
+//  normalised value of every parameter next to the sound-state tree, so a
+//  restore is bit-exact even where the tree round trip (real value text and
+//  back) would not be.
+// ===========================================================================
+std::vector<float> VivisectProcessor::currentNormalised() const
+{
+    const auto& all = getParameters();
+    std::vector<float> v;
+    v.reserve ((size_t) all.size());
+    for (auto* p : all)
+        v.push_back (p->getValue());
+    return v;
+}
+
+VivisectProcessor::UndoSnapshot VivisectProcessor::captureUndoSnapshot()
+{
+    UndoSnapshot s;
+    s.norm = currentNormalised();
+    s.tree = soundStateSnapshot();
+    return s;
+}
+
+void VivisectProcessor::applyUndoSnapshot (const UndoSnapshot& snap)
+{
+    ++undoScopeDepth;                       // our own edits are not new steps
+    restoreSoundState (snap.tree);
+    const auto& all = getParameters();
+    if ((size_t) all.size() == snap.norm.size())
+        for (int i = 0; i < all.size(); ++i)
+            if (all[i]->getValue() != snap.norm[(size_t) i])
+                all[i]->setValueNotifyingHost (snap.norm[(size_t) i]);
+    --undoScopeDepth;
+    gestureDepth = 0;
+    gestureStart.reset();
+}
+
+void VivisectProcessor::pushUndoSnapshot()
+{
+    auto snap = captureUndoSnapshot();
+    const juce::ScopedLock sl (undoLock);
+    undoStack.push_back (std::move (snap));
+    while ((int) undoStack.size() > kUndoDepth)
+        undoStack.pop_front();
+    redoStack.clear();                      // a new edit ends the redo branch
+}
+
+bool VivisectProcessor::undo()
+{
+    UndoSnapshot target;
+    {
+        const juce::ScopedLock sl (undoLock);
+        if (undoStack.empty()) return false;
+        target = std::move (undoStack.back());
+        undoStack.pop_back();
+    }
+    auto now = captureUndoSnapshot();
+    {
+        const juce::ScopedLock sl (undoLock);
+        redoStack.push_back (std::move (now));
+        while ((int) redoStack.size() > kUndoDepth) redoStack.pop_front();
+    }
+    applyUndoSnapshot (target);
+    return true;
+}
+
+bool VivisectProcessor::redo()
+{
+    UndoSnapshot target;
+    {
+        const juce::ScopedLock sl (undoLock);
+        if (redoStack.empty()) return false;
+        target = std::move (redoStack.back());
+        redoStack.pop_back();
+    }
+    auto now = captureUndoSnapshot();
+    {
+        const juce::ScopedLock sl (undoLock);
+        undoStack.push_back (std::move (now));      // redo must not clear the redo stack
+        while ((int) undoStack.size() > kUndoDepth) undoStack.pop_front();
+    }
+    applyUndoSnapshot (target);
+    return true;
+}
+
+bool VivisectProcessor::canUndo() const { const juce::ScopedLock sl (undoLock); return ! undoStack.empty(); }
+bool VivisectProcessor::canRedo() const { const juce::ScopedLock sl (undoLock); return ! redoStack.empty(); }
+int  VivisectProcessor::undoDepth() const { const juce::ScopedLock sl (undoLock); return (int) undoStack.size(); }
+int  VivisectProcessor::redoDepth() const { const juce::ScopedLock sl (undoLock); return (int) redoStack.size(); }
+
+void VivisectProcessor::clearUndoHistory()
+{
+    const juce::ScopedLock sl (undoLock);
+    undoStack.clear();
+    redoStack.clear();
+    gestureDepth = 0;
+    gestureStart.reset();
+}
+
+// "Undo: Chaos 0.40 -> 0.12" when one control differs, a count when several.
+juce::String VivisectProcessor::describeUndoStep (const UndoSnapshot& target, const char* verb) const
+{
+    const auto now = currentNormalised();
+    const auto& all = getParameters();
+    int changed = 0, first = -1;
+    if (now.size() == target.norm.size())
+        for (size_t i = 0; i < now.size(); ++i)
+            if (now[i] != target.norm[i]) { if (first < 0) first = (int) i; ++changed; }
+
+    const juce::String head = juce::String (verb) + ": ";
+    if (changed == 0)  return head + "last action";
+    if (changed > 1)   return head + juce::String (changed) + " controls";
+    auto* p = all[first];
+    return head + p->getName (24) + " " + p->getText (now[(size_t) first], 12)
+         + " -> " + p->getText (target.norm[(size_t) first], 12);
+}
+
+juce::String VivisectProcessor::undoLabel() const
+{
+    const juce::ScopedLock sl (undoLock);
+    return undoStack.empty() ? juce::String ("Undo: nothing to undo")
+                             : describeUndoStep (undoStack.back(), "Undo");
+}
+juce::String VivisectProcessor::redoLabel() const
+{
+    const juce::ScopedLock sl (undoLock);
+    return redoStack.empty() ? juce::String ("Redo: nothing to redo")
+                             : describeUndoStep (redoStack.back(), "Redo");
+}
+
+// One undo step per completed UI gesture. beginChangeGesture arrives before the
+// first value change, so that is the state to return to; a gesture that ended
+// where it started (a click without a move) adds nothing. Host automation never
+// opens a gesture here, and actions that push their own step are skipped.
+void VivisectProcessor::UndoGestureListener::parameterGestureChanged (int, bool starting)
+{
+    auto& o = owner;
+    if (o.undoScopeDepth > 0) return;
+    if (starting)
+    {
+        if (o.gestureDepth++ == 0)
+            o.gestureStart = o.captureUndoSnapshot();
+    }
+    else if (o.gestureDepth > 0 && --o.gestureDepth == 0)
+    {
+        if (o.gestureStart.has_value() && o.gestureStart->norm != o.currentNormalised())
+        {
+            const juce::ScopedLock sl (o.undoLock);
+            o.undoStack.push_back (std::move (*o.gestureStart));
+            while ((int) o.undoStack.size() > kUndoDepth) o.undoStack.pop_front();
+            o.redoStack.clear();
+        }
+        o.gestureStart.reset();
+    }
+}
+
+// ===========================================================================
+//  Capture (F3)
+// ===========================================================================
+static const juce::Identifier kCaptureBarsProp { "captureBars" };
+
+int VivisectProcessor::captureBars() const
+{
+    const auto t = apvts.state.getChildWithName (kSettingsTag);
+    const int b = t.isValid() ? (int) t.getProperty (kCaptureBarsProp, 4) : 4;
+    return vsx::capture::isValidBars (b) ? b : 4;
+}
+
+void VivisectProcessor::setCaptureBars (int bars)
+{
+    if (vsx::capture::isValidBars (bars) && bars != captureBars())
+        settingsTree().setProperty (kCaptureBarsProp, bars, nullptr);
+}
+
+bool VivisectProcessor::startCapture (int bars)
+{
+    if (isSuspended()) return false;        // never records while suspended
+    return capture.start (bars);
+}
+
+void VivisectProcessor::cancelCapture() { capture.cancel(); }
 
 juce::AudioProcessorEditor* VivisectProcessor::createEditor() { return new VivisectEditor (*this); }
 
