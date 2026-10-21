@@ -406,6 +406,7 @@ public:
         repeatsLeft = (int) ratchet * (1 + (int) std::floor (pp2 * 2.0)) + 1;
         pitch = 1.0; rpos = 0.0; gain = 1.0f; active = true; startOff = c.startOffset;
         drift = (pp3 * 0.05f + c.pitchChaos * 0.04f) * (c.rng->nextFloat() * 2.f - 1.f);
+        scaleChaos = c.pitchChaos;      // ==== MUSICAL (F2) ====
         lastGrabStart.store ((i64) c.sourcePos);
         lastGrabLen.store (sliceLen);
     }
@@ -427,7 +428,10 @@ public:
             {
                 rpos -= repeatLen;
                 --repeatsLeft;
-                pitch *= (1.0 + drift);
+                // ==== MUSICAL (F2) ==== Scale Lock: every repeat lands on a scale degree
+                if (scale.on) pitch = (double) scale.pickRatio (scaleRng.nextFloat(), scaleChaos);
+                else          pitch *= (1.0 + drift);
+                // ==== end MUSICAL (F2) ====
                 gain  *= 0.9f;
             }
         }
@@ -439,6 +443,8 @@ private:
     int sliceLen = 0, repeatsLeft = 0, startOff = 0;
     double rpos = 0, repeatLen = 0, pitch = 1;
     float gain = 1.f, drift = 0.f;
+    float scaleChaos = 0.f;                 // ==== MUSICAL (F2) ====
+    juce::Random scaleRng { 0x5ca1e01 };    // only drawn from while Scale Lock is on
     bool active = false;
 };
 
@@ -456,6 +462,7 @@ public:
         sizeS      = (0.005 + pp1 * 0.195) * sr;
         spawnPer   = sr / (4.0 + pp2 * 76.0);
         sprayCents = pp3 * 2400.f;
+        scaleChaos = c.pitchChaos;      // ==== MUSICAL (F2) ====
         spread     = (0.02 + pp3 * 0.4 + c.chaos * 0.5) * c.samplesPerBeat * 2.0;
         spawnCnt   = c.startOffset;
         act = 1.f;
@@ -480,6 +487,8 @@ public:
                             g.pos  = center + (rng.nextFloat() * 2.f - 1.f) * spread;
                             g.play = 0.0;
                             g.inc  = std::pow (2.0, (rng.nextFloat() * 2.f - 1.f) * sprayCents / 1200.0);
+                            // ==== MUSICAL (F2) ==== per-grain pitch picks a scale degree
+                            if (scale.on) g.inc = (double) scale.pickRatio (scaleRng.nextFloat(), scaleChaos);
                             g.len  = sizeS * (0.6 + 0.8 * rng.nextFloat());
                             const float pan = rng.nextFloat();
                             g.aL = std::sqrt (1.f - pan);
@@ -513,6 +522,8 @@ private:
     SpecimenBuffer* spec = nullptr;
     int srcSel = 0;
     float morph = .5f, sprayCents = 0.f;
+    float scaleChaos = 0.f;                 // ==== MUSICAL (F2) ====
+    juce::Random scaleRng { 0x5ca1e02 };
     int cloudLeft = 0;
     double center = 0, sizeS = 0, spawnPer = 1, spawnCnt = 0, spread = 0;
     juce::Random rng { 0x9e779 };
@@ -538,6 +549,10 @@ public:
             for (int i = 0; i < sliceLen; ++i)
                 slice.setSample (ch, i, readSource (c, ch, c.sourcePos + i));
         play = sliceLen - 1;
+        // ==== MUSICAL (F2) ==== Scale Lock: the reversed pass plays at a scale-degree pitch
+        playStep = 1.0;
+        if (scale.on) playStep = (double) scale.pickRatio (scaleRng.nextFloat(), c.pitchChaos);
+        // ==== end MUSICAL (F2) ====
         active = true;
         tailLeft = (int) (sr * 1.2);
         bloom = pp2;
@@ -568,7 +583,7 @@ public:
                     : 1.f;
                 a[i] = lerpBuf (slice, 0, play, sliceLen) * env;
                 b[i] = lerpBuf (slice, 1, play, sliceLen) * env;
-                play -= 1.0;
+                play -= playStep;
                 if (play < 0.0) active = false;
             }
             else --tailLeft;
@@ -584,6 +599,8 @@ private:
     juce::Reverb reverb;
     int sliceLen = 0, tailLeft = 0, startOff = 0;
     double play = 0;
+    double playStep = 1.0;                  // ==== MUSICAL (F2) ====
+    juce::Random scaleRng { 0x5ca1e03 };
     float bloom = 0.f;
     bool active = false;
 };

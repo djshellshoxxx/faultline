@@ -134,6 +134,13 @@ public:
     float uiScale() const;                   // editor zoom; <= 0 if never set
     void  setUiScale (float);
 
+    // ==== MUSICAL (F4) ==== user settings (VSX_SETTINGS), never part of sound state
+    bool simpleViewEnabled() const;
+    void setSimpleViewEnabled (bool);
+    bool firstRunHintDismissed() const;
+    void setFirstRunHintDismissed (bool);
+    // ==== end MUSICAL (F4) ====
+
     // -- MIDI learn ---------------------------------------------------------
     void beginMidiLearn (const juce::String& paramID);
     void cancelMidiLearn();

@@ -20,6 +20,25 @@ using namespace vsx;
 
 static const juce::Identifier kSamplesTag { "VSX_SAMPLES" };
 
+// ==== MUSICAL (F2/F4) ====
+// A session or preset saved by an older version has no entry for the Scale Lock /
+// Dose parameters. They must come back at their defaults, even when this instance
+// currently holds other values (replaceState leaves absent parameters untouched).
+static void defaultAbsentMusicalParams (juce::AudioProcessorValueTreeState& apvts,
+                                        const juce::ValueTree& incoming)
+{
+    for (const auto* pid : { id::scaleOn, id::scaleRoot, id::scaleType, id::scaleRange, id::dose })
+    {
+        bool present = false;
+        for (const auto& child : incoming)
+            present = present || (child.hasType ("PARAM") && child.getProperty ("id").toString() == pid);
+        if (! present)
+            if (auto* rp = apvts.getParameter (pid))
+                rp->setValue (rp->getDefaultValue());
+    }
+}
+// ==== end MUSICAL (F2/F4) ====
+
 // ===========================================================================
 VivisectProcessor::VivisectProcessor()
     : juce::AudioProcessor (BusesProperties()
@@ -34,6 +53,7 @@ VivisectProcessor::VivisectProcessor()
     for (auto& v : pendingCCValue) v.store (-1.f);
     for (auto& v : pendingCCParam) v.store (-1);
     seedDefaultMidiMap();
+    setSimpleViewEnabled (true);        // MUSICAL (F4): fresh instance = fresh install default
 }
 VivisectProcessor::~VivisectProcessor()
 {
@@ -115,7 +135,8 @@ void VivisectProcessor::triggerSurgeonManual (int i)
                        pv (sidRaw (i, SP_P2)),
                        pv (sidRaw (i, SP_P3)));
     auto c = scheduler.makeManualContext (pv (sidRaw (i, SP_P1)),
-                                          (int) pv (id::sourceSel), pv (id::morph), pv (id::chaos),
+                                          (int) pv (id::sourceSel), pv (id::morph),
+                                          doseUp (pv (id::chaos), pv (id::dose), dosek::chaos),   // MUSICAL (F4)
                                           60.0 / lastBpm * sampleRate, specimen, analysis,
                                           bufferRegionSamples (60.0 / lastBpm * sampleRate));
     rack[i].trigger (c);
@@ -259,18 +280,29 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     else          decayPhase = juce::jmax (0.f, decayPhase - (float) (n / (2.0 * sampleRate)));
 
     // ---- resolved globals ---------------------------------------------
-    float chaos = juce::jmax (pvMod (id::chaos, 1), decayPhase);
-    const float gPull   = pvMod (id::gravityPull, 2);
+    // ==== MUSICAL (F4) ==== DOSE is applied after modulation; identity at 0.
+    const float dose = pv (id::dose);
+    float chaos = juce::jmax (doseUp (pvMod (id::chaos, 1), dose, dosek::chaos), decayPhase);
+    const float gPull   = doseDown (pvMod (id::gravityPull, 2), dose, dosek::gravityPull);
     const float swing   = pvMod (id::swing, 3);
     const int   grid    = (int) pv (id::gravityGrid);
-    const float trigRate = pvMod (id::triggerRate, 4);
-    float reinject = juce::jmax (pvMod (id::reinject, 5), decayPhase * 0.7f);
+    const float trigRate = doseUp (pvMod (id::triggerRate, 4), dose, dosek::triggerRate);
+    float reinject = juce::jmax (doseUp (pvMod (id::reinject, 5), dose, dosek::reinject), decayPhase * 0.7f);
+    // ==== end MUSICAL (F4) ====
     reinject = juce::jmin (1.f, reinject + deriveChaos (chaos).feedback * 0.4f);
     const float analysisInform = pv (id::analysisInform);
     const int   sourceSel = (int) pv (id::sourceSel);
     const float morph = pvMod (id::morph, 6);
     const bool  midiMode = pv (id::midiMode) > 0.5f;
     const bool  panic = pv (id::panicFreeze) > 0.5f;
+
+    // ==== MUSICAL (F2) ====
+    ScaleLock scaleLock;
+    scaleLock.on    = pv (id::scaleOn) > 0.5f;
+    scaleLock.root  = juce::jlimit (0, 11, (int) pv (id::scaleRoot));
+    scaleLock.type  = juce::jlimit (0, kNumScaleTypes - 1, (int) pv (id::scaleType));
+    scaleLock.range = pv (id::scaleRange);
+    // ==== end MUSICAL (F2) ====
 
     std::array<bool,  kNumSurgeons> on {};
     std::array<float, kNumSurgeons> mixA {}, probA {}, p1A {};
@@ -288,9 +320,12 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
         float q3 = pv (sidRaw (s, SP_P3));
         if (s == S_STUTTER)  q3 = pvMod (sidRaw (0, SP_P3), 7);
         if (s == S_GRANULAR) { q2 = pvMod (sidRaw (1, SP_P2), 8); q3 = pvMod (sidRaw (1, SP_P3), 9); }
-        if (s == S_CORRUPT)  { q1 = pvMod (sidRaw (3, SP_P1), 10); q2 = pvMod (sidRaw (3, SP_P2), 11); }
+        // MUSICAL (F4): fewer bits = crunchier, so DOSE pulls BITS down
+        if (s == S_CORRUPT)  { q1 = doseDown (pvMod (sidRaw (3, SP_P1), 10), dose, dosek::corruptBits);
+                               q2 = pvMod (sidRaw (3, SP_P2), 11); }
         if (s == S_FREEZE)   q3 = pvMod (sidRaw (5, SP_P3), 12);
         rack[s].setParams (q1, q2, q3);
+        rack[s].setScale (scaleLock);                       // MUSICAL (F2)
     }
 
     if (decayPhase > 0.05f)
@@ -386,7 +421,8 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     // ---- SCAR (master texture effect) --------------------------------
     if (pv (id::scarOn) > 0.5f)
     {
-        scar.process (workBuf, n, pv (id::scarDrive), pv (id::scarMix));
+        scar.process (workBuf, n, doseUp (pv (id::scarDrive), dose, dosek::scarDrive),   // MUSICAL (F4)
+                      pv (id::scarMix));
         scarWasOn = true;
     }
     else if (scarWasOn)
@@ -754,6 +790,8 @@ void VivisectProcessor::setStateInformation (const void* data, int size)
             if (samples.isValid())
                 state.removeChild (samples, nullptr);
 
+            defaultAbsentMusicalParams (apvts, state);     // MUSICAL (F2/F4)
+
             apvts.replaceState (state);
             syncFromStateTree();
 
@@ -808,6 +846,32 @@ void VivisectProcessor::setUiScale (float s)
         settingsTree().setProperty (kUiScaleProp, juce::jlimit (0.5f, 1.5f, s), nullptr);
 }
 
+// ==== MUSICAL (F4) ==== Simple view + first-run hint are user settings: they live in
+// VSX_SETTINGS, so presets, A/B, history, RANDOM and MUTATE never touch them. A
+// session saved before 0.10 has no `simpleView` property and therefore restores OFF.
+static const juce::Identifier kSimpleViewProp { "simpleView" };
+static const juce::Identifier kHintDoneProp   { "hintDismissed" };
+
+bool VivisectProcessor::simpleViewEnabled() const
+{
+    const auto t = apvts.state.getChildWithName (kSettingsTag);
+    return t.isValid() ? (bool) t.getProperty (kSimpleViewProp, false) : false;
+}
+void VivisectProcessor::setSimpleViewEnabled (bool on)
+{
+    settingsTree().setProperty (kSimpleViewProp, on, nullptr);
+}
+bool VivisectProcessor::firstRunHintDismissed() const
+{
+    const auto t = apvts.state.getChildWithName (kSettingsTag);
+    return t.isValid() ? (bool) t.getProperty (kHintDoneProp, false) : false;
+}
+void VivisectProcessor::setFirstRunHintDismissed (bool done)
+{
+    settingsTree().setProperty (kHintDoneProp, done, nullptr);
+}
+// ==== end MUSICAL (F4) ====
+
 juce::ValueTree VivisectProcessor::soundStateSnapshot()
 {
     auto state = apvts.copyState();
@@ -831,6 +895,7 @@ void VivisectProcessor::restoreSoundState (const juce::ValueTree& source)
     if (currentSettings.isValid())
         next.addChild (currentSettings.createCopy(), -1, nullptr);
 
+    defaultAbsentMusicalParams (apvts, next);               // MUSICAL (F2/F4)
     apvts.replaceState (next);
 }
 
@@ -1129,6 +1194,8 @@ void VivisectProcessor::hardResetAllSettings()
     // Rebuild documented defaults immediately. A hard reset should leave the
     // plugin usable now, not only after the next state reload.
     seedDefaultMidiMap();
+    setSimpleViewEnabled (true);        // MUSICAL (F4): back to fresh-install defaults
+    setFirstRunHintDismissed (false);
 
     // 4. forget loaded samples and the A/B snapshots
     clearSampleSlot (0);
@@ -1300,7 +1367,8 @@ void VivisectProcessor::randomizeAll()
         for (const auto& pid : { id::inputTrim, id::outputTrim, id::bufferBars,
                                  id::sourceSel, id::midiMode, id::panicFreeze,
                                  id::decayArm, id::decayTime, id::flatOn,
-                                 id::flatTone, id::flatBleed, id::flatMix })
+                                 id::flatTone, id::flatBleed, id::flatMix,
+                                 id::scaleRoot, id::scaleType })       // MUSICAL (F2): the song's key
             if (auto* p = apvts.getParameter (pid))
                 preserved[pid] = p->getValue();
 
@@ -1347,6 +1415,11 @@ void VivisectProcessor::randomizeAll()
     setNorm   (id::scarOn,         rng.nextFloat() < 0.35f ? 1.f : 0.f);
     setNorm   (id::scarDrive,      rr (0.08f, 0.82f));
     setNorm   (id::scarMix,        rr (0.15f, 0.72f));
+    // ==== MUSICAL (F2/F4) ==== root and type are the song's key: RANDOM leaves them alone
+    setNorm   (id::scaleOn,        rng.nextFloat() < 0.30f ? 1.f : 0.f);
+    setNorm   (id::scaleRange,     rr (0.10f, 0.80f));
+    setNorm   (id::dose,           rr (0.f, 0.60f));
+    // ==== end MUSICAL (F2/F4) ====
 
     bool anyOn = false;
     juce::Array<int> eligibleOn;
@@ -1431,7 +1504,8 @@ void VivisectProcessor::mutateCurrent()
     for (auto pid : { id::chaos, id::gravityPull, id::swing, id::dryWet,
                       id::triggerRate, id::reinject, id::analysisInform, id::morph,
                       id::scAmount, id::scarDrive, id::scarMix, id::lfo1Rate,
-                      id::lfo2Rate, id::macro1, id::macro2 })
+                      id::lfo2Rate, id::macro1, id::macro2,
+                      id::scaleRange, id::dose })                   // MUSICAL (F2/F4)
         mutateContinuous (pid);
 
     mutateChoice (id::gravityGrid);
@@ -1473,6 +1547,13 @@ void VivisectProcessor::mutateCurrent()
         mutateChoice (pre + "dst");
         mutateContinuous (pre + "depth");
     }
+
+    // ==== MUSICAL (F2) ====
+    if (amount >= 0.70f && ! isParameterLocked (id::scaleOn)
+        && rng.nextFloat() < (amount - 0.70f) * 0.30f)
+        if (auto* p = apvts.getParameter (id::scaleOn))
+            p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.f : 1.f);
+    // ==== end MUSICAL (F2) ====
 
     if (amount >= 0.70f && ! isParameterLocked (id::scarOn)
         && rng.nextFloat() < (amount - 0.70f) * 0.30f)
