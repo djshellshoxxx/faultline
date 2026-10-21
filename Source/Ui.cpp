@@ -983,6 +983,7 @@ void HistoryBar::paint (juce::Graphics& g)
 OverlayPanel::OverlayPanel (juce::String t) : title (std::move (t))
 {
     addAndMakeVisible (closeBtn);
+    closeBtn.setTooltip ("Close this page.");
     closeBtn.onClick = [this] { if (onClose) onClose(); };
     setInterceptsMouseClicks (true, true);
 }
@@ -1304,6 +1305,8 @@ OptionsPanel::OptionsPanel() : OverlayPanel ("OPTIONS")
 {
     tooltips.setColour (juce::ToggleButton::textColourId, col::text);
     tooltips.setColour (juce::ToggleButton::tickColourId, col::accent);
+    tooltips.setTooltip ("Show a short explanation when you hover over a control.");
+    audioBtn.setTooltip ("Standalone only: choose the audio device, sample rate, buffer size and MIDI inputs.");
     tooltips.onClick = [this] { if (onTooltipsChanged) onTooltipsChanged (tooltips.getToggleState()); };
     addAndMakeVisible (tooltips);
 

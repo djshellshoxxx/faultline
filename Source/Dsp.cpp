@@ -284,7 +284,6 @@ ChaosField deriveChaos (float cIn) noexcept
     f.lengthJitter  = juce::jlimit (0.f, 1.f, (c - 0.15f) / 0.85f) * 0.8f;
     f.skipProb      = juce::jlimit (0.f, 0.55f, c - 0.30f);
     f.wrongSlice    = juce::jlimit (0.f, 0.90f, (c - 0.45f) * 1.6f);
-    f.routeSwap     = juce::jlimit (0.f, 0.50f, (c - 0.60f) * 1.2f);
     f.feedback      = juce::jlimit (0.f, 1.f,  (c - 0.55f) * 2.0f);
     f.pitchChaos    = sq;
     f.gridBypass    = juce::jlimit (0.f, 1.f,  (c - 0.70f) * 3.0f);
