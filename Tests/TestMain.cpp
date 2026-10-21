@@ -180,6 +180,10 @@ std::map<String, float> snapshotParams (VivisectProcessor& p)
 #include "TestsAudit.inc"
 #define VSX_HAVE_AUDIT_TESTS 1
 #endif
+#if __has_include("TestsQa.inc") && defined (VSX_HAVE_UNDO_CAPTURE_TESTS)
+#include "TestsQa.inc"
+#define VSX_HAVE_QA_TESTS 1
+#endif
 
 int main()
 {
@@ -1595,6 +1599,9 @@ int main()
 #endif
 #ifdef VSX_HAVE_LAYOUT_TESTS
     run_layout_tests (kRate, kBlock);
+#endif
+#ifdef VSX_HAVE_QA_TESTS
+    run_qa_tests (kRate, kBlock);
 #endif
 
     std::printf ("\n=====================\n%d checks, %d failed\n", checksRun, checksFailed);

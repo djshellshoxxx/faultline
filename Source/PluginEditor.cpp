@@ -1077,6 +1077,8 @@ void VivisectView::applySimpleView (bool simple)
 {
     simpleView = simple;
     simpleBtn->setSimple (simple);
+    // A control hidden mid-drag never receives its mouse-up, so close any open undo gesture now.
+    proc.commitOpenUndoGesture();
 
     // The one place that lists what Simple view hides: everything outside F4's
     // list (Dose, Chaos, Gravity, Dry/Wet, surgeon On/Mix, source, presets,

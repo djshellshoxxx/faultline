@@ -872,6 +872,7 @@ std::map<juce::String, float> VivisectProcessor::factoryPreset (int index) const
             set (S (S_GRANULAR, "mix"), 0.6f); set (S (S_GRANULAR, "p1"), 0.2f); set (S (S_GRANULAR, "p2"), 0.65f);
             set (S (S_REVERSE, "mix"), 0.45f); set (S (S_REVERSE, "prob"), 0.3f); set (S (S_REVERSE, "p3"), 0.8f);
             set (id::scaleOn, 1.f); real (id::scaleRoot, 9); real (id::scaleType, 9); set (id::scaleRange, 0.75f);
+            real (id::outputTrim, -2.5f);   // level-matched: in-key first repeats made the stutter hotter
             break;
         case 9: // Dose Ramp - tame at zero, nasty at full; ride the DOSE knob
             set (id::chaos, 0.12f); set (id::gravityPull, 0.9f); set (id::dryWet, 0.85f);
@@ -1981,6 +1982,7 @@ void VivisectProcessor::pushUndoSnapshot()
 
 bool VivisectProcessor::undo()
 {
+    commitOpenUndoGesture();    // Ctrl+Z during a drag undoes that drag, not the step before it
     UndoSnapshot target;
     {
         const juce::ScopedLock sl (undoLock);
@@ -2000,6 +2002,7 @@ bool VivisectProcessor::undo()
 
 bool VivisectProcessor::redo()
 {
+    commitOpenUndoGesture();
     UndoSnapshot target;
     {
         const juce::ScopedLock sl (undoLock);

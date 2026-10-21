@@ -406,6 +406,9 @@ public:
         pitch = 1.0; rpos = 0.0; gain = 1.0f; active = true; startOff = c.startOffset;
         drift = (pp3 * 0.05f + c.pitchChaos * 0.04f) * (c.rng->nextFloat() * 2.f - 1.f);
         scaleChaos = c.pitchChaos;      // ==== MUSICAL (F2) ====
+        // The FIRST repeat must already sit on a scale degree (root/type are set before
+        // trigger), not only the later ones.
+        if (scale.on) pitch = (double) scale.pickRatio (scaleRng.nextFloat(), scaleChaos);
         lastGrabStart.store ((i64) c.sourcePos);
         lastGrabLen.store (sliceLen);
     }

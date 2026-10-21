@@ -297,7 +297,11 @@ private:
     {
         explicit UndoScope (VivisectProcessor& p) : owner (p)
         {
-            if (owner.undoScopeDepth++ == 0) owner.pushUndoSnapshot();
+            if (owner.undoScopeDepth++ == 0)
+            {
+                owner.commitOpenUndoGesture();      // a drag still open becomes its own step first
+                owner.pushUndoSnapshot();
+            }
         }
         ~UndoScope() { --owner.undoScopeDepth; }
         VivisectProcessor& owner;
