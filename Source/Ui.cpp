@@ -132,12 +132,22 @@ namespace
                 gValueWindow.reset();
                 if (result != 1 || text.isEmpty() || target == nullptr) return;
                 if (auto* p = host.params().getParameter (paramID))
-                    p->setValueNotifyingHost (juce::jlimit (0.f, 1.f, p->getValueForText (text)));
+                    setParameterAsGesture (*p, p->getValueForText (text));
             }), false);
     }
 }
 
 void dismissValueEntry() { gValueWindow.reset(); }
+
+// A menu edit is a UI edit, so it is one complete gesture: that is what lets the
+// processor's undo listener record it as a single step (a bare
+// setValueNotifyingHost would be invisible to UNDO).
+void setParameterAsGesture (juce::RangedAudioParameter& p, float norm)
+{
+    p.beginChangeGesture();
+    p.setValueNotifyingHost (juce::jlimit (0.f, 1.f, norm));
+    p.endChangeGesture();
+}
 
 void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::Component* target)
 {
@@ -169,7 +179,7 @@ void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::C
                          if (p == nullptr) return;
                          switch (choice)
                          {
-                             case 1: p->setValueNotifyingHost (p->getDefaultValue()); break;
+                             case 1: setParameterAsGesture (*p, p->getDefaultValue()); break;
                              case 2: showValueEntry (host, paramID, safe); break;
                              case 3: host.beginMidiLearnFor (paramID); break;
                              case 4: host.clearCCForParam (paramID); break;
@@ -888,6 +898,12 @@ SurgeonStrip::SurgeonStrip (ParamHost& hostRef, int surgeonIndex, std::function<
     addAndMakeVisible (route);
     routeA = std::make_unique<CA> (hostRef.params(), sid (idx, "route"), route);
 
+    // ==== ROUTING (G1) ====
+    routeAmt = make ("routeAmt", "AMT",
+                     "How much of the Route In source reaches this surgeon. 0 = no routing, "
+                     "50% = the classic level. Feedback loops stay bounded.");
+    // ==== END ROUTING (G1) ====
+
     startTimerHz (24);
 }
 void SurgeonStrip::timerCallback()
@@ -895,24 +911,44 @@ void SurgeonStrip::timerCallback()
     const float a = getActivity ? getActivity() : 0.f;
     if (std::abs (a - act) > 0.005f || a > 0.f) { act = a; repaint(); }
 }
+void SurgeonStrip::setSimple (bool simple)
+{
+    simpleMode = simple;
+    for (auto* c : { (juce::Component*) prob.get(), (juce::Component*) k1.get(), (juce::Component*) k2.get(),
+                     (juce::Component*) k3.get(), (juce::Component*) routeAmt.get(), (juce::Component*) &route })
+        c->setVisible (! simple);
+    resized();
+    repaint();
+}
 void SurgeonStrip::resized()
 {
-    auto r = getLocalBounds().reduced (metric::grid, metric::gridFine);
+    auto r = getLocalBounds().reduced (metric::grid, 0);
     r.removeFromLeft (48 + metric::grid);          // icon area (painted)
 
     auto left = r.removeFromLeft (136);
     onBtn.setBounds (left.withSizeKeepingCentre (136, metric::buttonH));
 
     r.removeFromLeft (metric::grid);
-    const int kw = juce::jlimit (56, 72, (r.getWidth() - 112) / 5);
-    for (auto* s : { mix.get(), prob.get(), k1.get(), k2.get(), k3.get() })
+    // a small knob needs 12 (value) + 36 + 14 (arc) + 12 (caption) = 74px
+    const int knobH = juce::jmin (r.getHeight(), 74);
+    // five knobs, Route In (96) and Route Amt share what is left
+    const int kw = simpleMode ? 64 : juce::jlimit (48, 64, (r.getWidth() - 96 - 2 * metric::gridFine - 6 * metric::gridFine) / 6);
+    auto knobRow = [&] (juce::Rectangle<int> a) { return a.withSizeKeepingCentre (a.getWidth(), knobH); };
+    mix->setBounds (knobRow (r.removeFromLeft (kw)));
+    if (simpleMode)
+        return;
+    r.removeFromLeft (metric::gridFine);
+    for (auto* s : { prob.get(), k1.get(), k2.get(), k3.get() })
     {
-        s->setBounds (r.removeFromLeft (kw));
+        s->setBounds (knobRow (r.removeFromLeft (kw)));
         r.removeFromLeft (metric::gridFine);
     }
     r.removeFromLeft (metric::gridFine);
-    route.setBounds (r.removeFromLeft (juce::jmin (104, juce::jmax (0, r.getWidth())))
-                      .withSizeKeepingCentre (juce::jmin (104, juce::jmax (0, r.getWidth())), metric::buttonH - 4));
+    route.setBounds (r.removeFromLeft (96).withSizeKeepingCentre (96, metric::buttonH - 4));
+    // ==== ROUTING (G1) ====
+    r.removeFromLeft (metric::gridFine);
+    routeAmt->setBounds (knobRow (r.removeFromLeft (kw)));
+    // ==== END ROUTING (G1) ====
 }
 void SurgeonStrip::paint (juce::Graphics& g)
 {
@@ -973,6 +1009,7 @@ void HistoryBar::paint (juce::Graphics& g)
 OverlayPanel::OverlayPanel (juce::String t) : title (std::move (t))
 {
     addAndMakeVisible (closeBtn);
+    closeBtn.setTooltip ("Close this page.");
     closeBtn.onClick = [this] { if (onClose) onClose(); };
     setInterceptsMouseClicks (true, true);
 }
@@ -1056,8 +1093,14 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "  6. Drag the history bar at the bottom to rewind to any moment in the last minute.\n"
         "  7. Save what you like with MENU > Save As, or FREEZE / SAVE for a quick preset.\n"
         "\n"
+        "SIGNAL ORDER\n"
+        "  specimen buffer > six surgeons > DRY / WET > SCAR > TOURNIQUET > CLOT >\n"
+        "  (hidden FLATLINE) > OUT TRIM > output. Each effect stage is bit-exact bypassed\n"
+        "  when it is off.\n"
+        "\n"
         "THE GUI, TOP TO BOTTOM\n"
-        "  HEADER      Plugin name, preset menu, A / B compare, MENU and the gear (options).\n"
+        "  HEADER      Plugin name, preset menu, A / B compare, UNDO / REDO, SIMPLE, MENU and\n"
+        "              the gear (options).\n"
         "  LEVEL LED   Far left of the header. Dark grey is silence; it brightens towards\n"
         "              white as the output approaches 0 dBFS and latches RED while you are\n"
         "              over and clipping. If it is red, pull OUT TRIM down.\n"
@@ -1100,6 +1143,20 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "  IN / OUT TRIM Gain into and out of the plugin, in dB.\n"
         "  SCAR          Optional post-rack texture effect. DRIVE pushes into a bounded soft\n"
         "                clipper with extra transient edge; MIX blends it with the clean output.\n"
+        "  TOURNIQUET    Post-rack resonant filter (after SCAR). Mode, CUTOFF, RESO, ENV\n"
+        "                (input level moves the cutoff up to 4 octaves) and MIX. Off = bypass.\n"
+        "  CLOT          Post-rack tempo-synced stereo delay (after TOURNIQUET). TIME, FREE\n"
+        "                ms, FDBK, TONE (loop damping), SPREAD (mono to ping-pong), MIX.\n"
+        "                The line holds 4 s, so very long notes at slow tempos stop at 4 s.\n"
+        "  DOSE          One knob that pushes the whole rack harder: more chaos, trigger\n"
+        "                rate and reinject, crunchier CORRUPT bits, harder SCAR drive and a\n"
+        "                looser gravity. Zero does nothing.\n"
+        "  SCALE LOCK    Keeps pitch scatter in tune. With it on, STUTTER repeats, GRANULAR\n"
+        "                grains and REVERSE passes pick a note of the chosen ROOT and SCALE\n"
+        "                within RANGE (up to 12 semitones) instead of drifting freely, so\n"
+        "                STUTTER DRIFT and the pitch side of GRANULAR SPRAY do nothing while on.\n"
+        "  SIMPLE        Header button. Hides the mod matrix, routing and sidechain panels\n"
+        "                for a calmer window. Hidden controls keep working.\n"
         "  MIDI MODE     Suppresses the auto-scheduler. Surgeons only fire from MIDI.\n"
         "  PANIC FREEZE  Freezes the buffer and holds it on the Freeze surgeon.\n"
         "  DECAY         Arms a slow drive of chaos and corruption to maximum over DECAY T\n"
@@ -1124,14 +1181,32 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "  6 FREEZE   (defibrillator) OFFSET / LENGTH / BLUR\n"
         "      Phase-vocoder spectral freeze. BLUR randomises bin phase.\n"
         "  Each strip also has MIX, PROB (chance it acts) and ROUTE IN (feed another\n"
-        "  surgeon's output back through the specimen for feedback stacks).\n"
+        "  surgeon's output back through the specimen for feedback stacks) with AMT\n"
+        "  for how much of it comes back. Loops are limited, so they stay bounded.\n"
         "\n"
         "MOD MATRIX\n"
         "  Four slots. Sources: LFO 1, LFO 2 (each with rate and shape), Env Follow,\n"
         "  Macro 1, Macro 2, Random Walk. Destinations: Chaos, Gravity Pull, Swing,\n"
         "  Trigger Rate, Reinject, Morph, Stutter Drift, Granular Density, Granular Spray,\n"
-        "  Corrupt Bits, Corrupt Rate, Freeze Blur. Depth is bipolar - centre is off.\n"
+        "  Corrupt Bits, Corrupt Rate, Freeze Blur, TQ Cutoff, TQ Resonance, Clot\n"
+        "  Feedback, Clot Mix. Depth is bipolar - centre is off.\n"
         "\n"
+        // ==== UNDO/CAPTURE hook ====
+        "UNDO / REDO\n"
+        "  UNDO and REDO in the header (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y) step through\n"
+        "  your last 100 changes to the sound controls. A whole knob drag is one step, and so\n"
+        "  are RANDOM, MUTATE, RESET, a preset load, an A/B swap and a history rewind. Host\n"
+        "  automation is not recorded. Settings, locks and MIDI maps are never undone.\n"
+        "\n"
+        "CAPTURE\n"
+        "  CAPTURE records the final output for 1, 2, 4 or 8 bars. While the host plays it\n"
+        "  waits for the next bar line; standalone or stopped it starts at once. Takes are\n"
+        "  saved as 24-bit WAV files in the Captures folder and the last eight appear in the\n"
+        "  shelf. Drag a take into your DAW or onto Sample A / B, or right-click it to open\n"
+        "  its folder, rename or delete it. CANCEL throws the take in progress away. The\n"
+        "  capture buffer holds 64 seconds (8 bars of 4/4 down to 30 BPM); longer is cut off.\n"
+        "\n"
+        // ==== end UNDO/CAPTURE hook ====
         "LOADING SAMPLES\n"
         "  Sample A and Sample B are the two slots the SOURCE control can read instead of\n"
         "  the live input. Load them either way:\n"
@@ -1175,20 +1250,26 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "\n"
         "BUTTONS\n"
         "  RANDOM        New sound. Later presses reset unlocked creative controls first;\n"
-        "                locks, I/O, routing, MIDI mode and hidden FLATLINE controls stay put.\n"
+        "                locks, I/O, routing, MIDI mode, the Scale Root / Scale Type (your key)\n"
+        "                and hidden FLATLINE controls stay put.\n"
         "  MUTATE        Nearby variation controlled by MUTATE AMT. Zero makes no changes.\n"
+        "                It leaves the Scale Root / Scale Type alone too.\n"
         "  RESET         Every parameter back to its default, including locked parameters.\n"
         "  A / B         Compare sound snapshots. Tool tips, MIDI mappings and locks stay put.\n"
         "  FREEZE / SAVE Saves sound controls as a timestamped user preset.\n"
         "\n"
         "PRESETS\n"
         "  Six factory characters: Clean Specimen, Late 90s Bristol, Berlin Basement,\n"
-        "  Warp 1995, Modern Hyperpop, SOPHIE-adjacent. User presets appear below them\n"
+        "  Warp 1995, Modern Hyperpop, SOPHIE-adjacent. Eight more show off the newer\n"
+        "  stages: Tourniquet Sweep, Clot Dub Smear, Minor Key Shrapnel (Scale Lock), Dose\n"
+        "  Ramp, Feedback Ward (surgeon routing), Notch Ghost, Telephone Gate and Whole Tone\n"
+        "  Haze. User presets appear below them\n"
         "  marked with an asterisk. Presets restore sound settings and leave your current\n"
         "  MIDI mappings, tool tip preference and exploration locks alone.\n"
         "\n"
         "TROUBLESHOOTING - THE PLUG-IN DOES NOT APPEAR IN MY DAW\n"
-        "  Vivisect installs as a VST3 plus a standalone application. If your host cannot\n"
+        "  Vivisect installs as a VST3, a CLAP, an Audio Unit (macOS), an LV2 (Linux) and a\n"
+        "  standalone application. If your host cannot\n"
         "  see it, install it by hand:\n"
         "\n"
         "  Windows   Copy the whole Vivisect.vst3 FOLDER (it is a folder, not a file) to\n"
@@ -1197,13 +1278,25 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "            or ~/Library/Audio/Plug-Ins/VST3/ for just you.\n"
         "  Linux     Copy Vivisect.vst3 to ~/.vst3/ or /usr/lib/vst3/.\n"
         "\n"
+        "  AU        macOS only. Copy Vivisect.component to ~/Library/Audio/Plug-Ins/Components/\n"
+        "            (or /Library/Audio/Plug-Ins/Components/). Logic and GarageBand read this.\n"
+        "  LV2       Linux only. Copy the Vivisect.lv2 folder to ~/.lv2/ or /usr/lib/lv2/.\n"
+        "\n"
         "  CLAP      Copy Vivisect.clap to the CLAP folder for your system:\n"
         "            Windows  C:\\Program Files\\Common Files\\CLAP\\\n"
         "            macOS    /Library/Audio/Plug-Ins/CLAP/ or ~/Library/Audio/Plug-Ins/CLAP/\n"
         "            Linux    ~/.clap/ or /usr/lib/clap/\n"
-        "  STANDALONE  Vivisect.exe (or Vivisect on Linux) runs on its own - no DAW\n"
+        "  STANDALONE  Vivisect.exe (Vivisect.app on macOS, Vivisect on Linux) runs on its\n"
+        "            own - no DAW\n"
         "            needed. Put it anywhere, e.g. C:\\Program Files\\Vivisect\\, and\n"
         "            pick your audio and MIDI devices under MENU > Options.\n"
+        "\n"
+        "  macOS GATEKEEPER  The macOS builds are ad-hoc signed, not notarized, so macOS\n"
+        "            blocks them at first. In Terminal, from the folder you unzipped into, run:\n"
+        "              xattr -dr com.apple.quarantine Vivisect.vst3 Vivisect.clap Vivisect.component Vivisect.app\n"
+        "            For the app you can also right-click it, choose Open, then Open again. If\n"
+        "            a plug-in is still blocked, use System Settings > Privacy & Security >\n"
+        "            Open Anyway. Use the arm64 zip on Apple Silicon and x86_64 on Intel.\n"
         "\n"
         "  Then rescan. Most hosts have a rescan or reset-and-rescan button in their\n"
         "  plug-in preferences; some only rescan on start-up, so restart the DAW if in\n"
@@ -1212,7 +1305,7 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "  paths, and a custom path set years ago is the usual culprit.\n"
         "\n"
         "  To uninstall, delete the Vivisect.vst3 folder and Vivisect.clap you copied in,\n"
-        "  and delete the standalone application. To remove settings and presets too, delete\n"
+        "  and delete the .component / .lv2 and the standalone application. To remove settings and presets too, delete\n"
         "  the Vivisect folder described under PRESET FILES below. Nothing is written to\n"
         "  the registry, so there is nothing else to clean up.\n"
         "\n"
@@ -1293,6 +1386,8 @@ OptionsPanel::OptionsPanel() : OverlayPanel ("OPTIONS")
 {
     tooltips.setColour (juce::ToggleButton::textColourId, col::text);
     tooltips.setColour (juce::ToggleButton::tickColourId, col::accent);
+    tooltips.setTooltip ("Show a short explanation when you hover over a control.");
+    audioBtn.setTooltip ("Standalone only: choose the audio device, sample rate, buffer size and MIDI inputs.");
     tooltips.onClick = [this] { if (onTooltipsChanged) onTooltipsChanged (tooltips.getToggleState()); };
     addAndMakeVisible (tooltips);
 
@@ -1630,8 +1725,9 @@ DebugPanel::DebugPanel() : OverlayPanel ("VIVISECT - DEBUG")
 
     hardBtn.setColour (juce::TextButton::textColourOffId, col::clip);
     hardBtn.setTooltip ("DESTRUCTIVE. Puts every setting back to its factory default, clears MIDI "
-                        "mappings, forgets loaded samples and A/B, and deletes cached files. Your "
-                        "saved presets are NOT touched. Use this when the plugin will not behave.");
+                        "mappings, forgets loaded samples, A/B and the undo history, and deletes cached "
+                        "files. Your saved presets and captured takes are NOT touched. Use this when "
+                        "the plugin will not behave.");
     hardBtn.onClick = [this]
     {
         // Destructive and not undoable, so it asks first.
@@ -1639,8 +1735,8 @@ DebugPanel::DebugPanel() : OverlayPanel ("VIVISECT - DEBUG")
                         .withIconType (juce::MessageBoxIconType::WarningIcon)
                         .withTitle ("Reset all settings to default?")
                         .withMessage ("This clears every setting, every MIDI mapping, both sample "
-                                      "slots, the A/B snapshots and the cache folder.\n\n"
-                                      "Your saved presets will NOT be deleted.\n\n"
+                                      "slots, the A/B snapshots, the undo history and the cache folder.\n\n"
+                                      "Your saved presets and captured takes will NOT be deleted.\n\n"
                                       "This cannot be undone.")
                         .withButton ("Reset everything")
                         .withButton ("Cancel");

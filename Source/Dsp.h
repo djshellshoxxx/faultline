@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 #include "Parameters.h"
+#include "Musical.h"
 
 // ============================================================================
 //  VIVISECT DSP CORE
@@ -394,7 +395,6 @@ struct ChaosField
     float lengthJitter  = 0.f;   // slice length variance
     float skipProb      = 0.f;   // dropped scheduled hits
     float wrongSlice    = 0.f;   // source position randomised
-    float routeSwap     = 0.f;   // surgeon assignment swap
     float feedback      = 0.f;   // extra reinject
     float pitchChaos    = 0.f;   // extra pitch drift
     float gridBypass    = 0.f;   // ignore gravity snap
@@ -435,6 +435,9 @@ public:
     virtual void prepare (double sr, int maxBlock) = 0;
     virtual void reset() = 0;
     virtual void setParams (float p1, float p2, float p3) { pp1 = p1; pp2 = p2; pp3 = p3; }
+    // ==== MUSICAL (F2) ====
+    void setScale (const ScaleLock& s) noexcept { scale = s; }
+    // ==== end MUSICAL (F2) ====
     virtual void trigger (const TriggerContext& ctx) = 0;
     virtual void process (juce::AudioBuffer<float>& add, int numSamples) = 0;
 
@@ -447,6 +450,7 @@ protected:
 
     double sr = 44100.0;
     float  pp1 = 0.35f, pp2 = 0.4f, pp3 = 0.3f;
+    ScaleLock scale;        // ==== MUSICAL (F2) ==== Off by default: legacy pitch behaviour
     float  act = 0.f;
     std::atomic<i64> lastGrabStart { 0 };
     std::atomic<int> lastGrabLen   { 0 };
@@ -472,6 +476,7 @@ public:
     void process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOut, int numSamples,
                   const std::array<float, kNumSurgeons>& mix,
                   const std::array<int,   kNumSurgeons>& routeIn,
+                  const std::array<float, kNumSurgeons>& routeAmt,
                   float reinjectAmt) noexcept;
 
     float maxActivity() const noexcept { return maxAct; }

@@ -20,6 +20,27 @@ using namespace vsx;
 
 static const juce::Identifier kSamplesTag { "VSX_SAMPLES" };
 
+// A session, preset, A/B slot or history frame saved by an older version has no entry
+// for the 0.10.0 parameters (effects, Scale Lock, Dose, Route Amt). They must come back
+// at their defaults even when this instance currently holds other values, because
+// replaceState leaves absent parameters untouched.
+static void defaultAbsentNewParams (juce::AudioProcessorValueTreeState& apvts,
+                                    const juce::ValueTree& incoming)
+{
+    juce::StringArray wanted;
+    for (const char* e : effectsParamIds()) wanted.add (e);
+    for (const char* m : { id::scaleOn, id::scaleRoot, id::scaleType, id::scaleRange, id::dose }) wanted.add (m);
+    for (int s = 0; s < kNumSurgeons; ++s) wanted.add (routeAmtRaw (s));
+
+    for (const auto& child : incoming)
+        if (child.hasType ("PARAM"))
+            wanted.removeString (child.getProperty ("id").toString());
+
+    for (const auto& pid : wanted)
+        if (auto* rp = apvts.getParameter (pid))
+            rp->setValueNotifyingHost (rp->getDefaultValue());
+}
+
 // ===========================================================================
 VivisectProcessor::VivisectProcessor()
     : juce::AudioProcessor (BusesProperties()
@@ -34,10 +55,46 @@ VivisectProcessor::VivisectProcessor()
     for (auto& v : pendingCCValue) v.store (-1.f);
     for (auto& v : pendingCCParam) v.store (-1);
     seedDefaultMidiMap();
+
+    // ==== EFFECTS (E1/E2) ====
+    fxTqOn = fxRef (id::tqOn);           fxTqMode = fxRef (id::tqMode);
+    fxTqCutoff = fxRef (id::tqCutoff);   fxTqRes = fxRef (id::tqRes);
+    fxTqEnv = fxRef (id::tqEnv);         fxTqMix = fxRef (id::tqMix);
+    fxClotOn = fxRef (id::clotOn);       fxClotTime = fxRef (id::clotTime);
+    fxClotFree = fxRef (id::clotFree);   fxClotFeedback = fxRef (id::clotFeedback);
+    fxClotTone = fxRef (id::clotTone);   fxClotSpread = fxRef (id::clotSpread);
+    fxClotMix = fxRef (id::clotMix);
+    // ==== END EFFECTS (E1/E2) ====
+    capture.setDirectory (vsx::userCapturesDir());
+    for (auto* prm : getParameters())
+        prm->addListener (&undoListener);       // F1: UI gestures coalesce into one undo step
+    setSimpleViewEnabled (true);        // MUSICAL (F4): fresh instance = fresh install default
 }
+
+// ==== EFFECTS (E1/E2) ====
+VivisectProcessor::FxRef VivisectProcessor::fxRef (const char* paramID) const
+{
+    FxRef r;
+    r.par = apvts.getParameter (paramID);
+    r.raw = apvts.getRawParameterValue (paramID);
+    return r;
+}
+
+// Base value plus the mod matrix offset, in the parameter's normalized space
+// (same behaviour as pvMod, without any string lookup).
+float VivisectProcessor::fxMod (const FxRef& r, int destEnum) const noexcept
+{
+    if (r.par == nullptr || r.raw == nullptr) return r.get();
+    const float base = r.par->convertTo0to1 (r.raw->load());
+    return r.par->convertFrom0to1 (juce::jlimit (0.f, 1.f, base + modMatrix.destOffset (destEnum)));
+}
+// ==== END EFFECTS (E1/E2) ====
 VivisectProcessor::~VivisectProcessor()
 {
+    for (auto* prm : getParameters())
+        prm->removeListener (&undoListener);
     stopTimer();
+    capture.shutdown();                         // F3: join the writer before anything it reads goes away
     // The crash handler is process-wide and points into this binary. Leaving it
     // installed after the host unloads the plug-in would turn the next host
     // crash into a jump into freed code.
@@ -60,8 +117,15 @@ void VivisectProcessor::prepareToPlay (double sr, int block)
     preparedBlock = block;
     scar.reset();
     scarWasOn = false;
+    // ==== EFFECTS (E1/E2) ====
+    tourniquet.prepare (sr);
+    tourniquetWasOn = false;
+    clot.prepare (sr);
+    clotWasOn = false;
+    // ==== END EFFECTS (E1/E2) ====
     flatline.prepare (sr, block);
     sampleRate = sr;
+    capture.prepare (sr);                       // F3: allocate the take buffer here, never on the audio thread
     specimen.prepare (sr, 45.0);
     analysis.prepare (sr);
     rack.prepare (sr, block);
@@ -115,7 +179,8 @@ void VivisectProcessor::triggerSurgeonManual (int i)
                        pv (sidRaw (i, SP_P2)),
                        pv (sidRaw (i, SP_P3)));
     auto c = scheduler.makeManualContext (pv (sidRaw (i, SP_P1)),
-                                          (int) pv (id::sourceSel), pv (id::morph), pv (id::chaos),
+                                          (int) pv (id::sourceSel), pv (id::morph),
+                                          doseUp (pv (id::chaos), pv (id::dose), dosek::chaos),   // MUSICAL (F4)
                                           60.0 / lastBpm * sampleRate, specimen, analysis,
                                           bufferRegionSamples (60.0 / lastBpm * sampleRate));
     rack[i].trigger (c);
@@ -137,11 +202,14 @@ void VivisectProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         {
             const int len = juce::jmin (preparedBlock, total - off);
             juce::AudioBuffer<float> chunk (buffer.getArrayOfWritePointers(), buffer.getNumChannels(), off, len);
+            chunkSampleOffset = off;
             processChunk (chunk, off == 0 ? midi : emptyMidi);
             emptyMidi.clear();
         }
+        chunkSampleOffset = 0;
         return;
     }
+    chunkSampleOffset = 0;
     processChunk (buffer, midi);
 }
 
@@ -221,12 +289,15 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     // ---- musical clock ----------------------------------------------------
     double bpm = lastBpm, ppq = 0.0;
     bool playing = false;
+    double barQuarters = 4.0;                       // capture: bar length in quarter notes
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
         {
             if (pos->getBpm())         bpm = *pos->getBpm();
             if (pos->getPpqPosition()) ppq = *pos->getPpqPosition();
             playing = pos->getIsPlaying();
+            if (auto ts = pos->getTimeSignature())
+                barQuarters = vsx::capture::barQuarters (ts->numerator, ts->denominator);
         }
     bpm = juce::jlimit (20.0, 300.0, bpm);
     lastBpm = bpm;
@@ -259,12 +330,15 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     else          decayPhase = juce::jmax (0.f, decayPhase - (float) (n / (2.0 * sampleRate)));
 
     // ---- resolved globals ---------------------------------------------
-    float chaos = juce::jmax (pvMod (id::chaos, 1), decayPhase);
-    const float gPull   = pvMod (id::gravityPull, 2);
+    // ==== MUSICAL (F4) ==== DOSE is applied after modulation; identity at 0.
+    const float dose = pv (id::dose);
+    float chaos = juce::jmax (doseUp (pvMod (id::chaos, 1), dose, dosek::chaos), decayPhase);
+    const float gPull   = doseDown (pvMod (id::gravityPull, 2), dose, dosek::gravityPull);
     const float swing   = pvMod (id::swing, 3);
     const int   grid    = (int) pv (id::gravityGrid);
-    const float trigRate = pvMod (id::triggerRate, 4);
-    float reinject = juce::jmax (pvMod (id::reinject, 5), decayPhase * 0.7f);
+    const float trigRate = doseUp (pvMod (id::triggerRate, 4), dose, dosek::triggerRate);
+    float reinject = juce::jmax (doseUp (pvMod (id::reinject, 5), dose, dosek::reinject), decayPhase * 0.7f);
+    // ==== end MUSICAL (F4) ====
     reinject = juce::jmin (1.f, reinject + deriveChaos (chaos).feedback * 0.4f);
     const float analysisInform = pv (id::analysisInform);
     const int   sourceSel = (int) pv (id::sourceSel);
@@ -272,9 +346,18 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     const bool  midiMode = pv (id::midiMode) > 0.5f;
     const bool  panic = pv (id::panicFreeze) > 0.5f;
 
+    // ==== MUSICAL (F2) ====
+    ScaleLock scaleLock;
+    scaleLock.on    = pv (id::scaleOn) > 0.5f;
+    scaleLock.root  = juce::jlimit (0, 11, (int) pv (id::scaleRoot));
+    scaleLock.type  = juce::jlimit (0, kNumScaleTypes - 1, (int) pv (id::scaleType));
+    scaleLock.range = pv (id::scaleRange);
+    // ==== end MUSICAL (F2) ====
+
     std::array<bool,  kNumSurgeons> on {};
     std::array<float, kNumSurgeons> mixA {}, probA {}, p1A {};
     std::array<int,   kNumSurgeons> routeA {};
+    std::array<float, kNumSurgeons> routeAmtA {};   // G1
     for (int s = 0; s < kNumSurgeons; ++s)
     {
         on[(size_t) s]     = pv (sidRaw (s, SP_ON)) > 0.5f;
@@ -282,15 +365,19 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
         probA[(size_t) s]  = pv (sidRaw (s, SP_PROB));
         p1A[(size_t) s]    = pv (sidRaw (s, SP_P1));
         routeA[(size_t) s] = (int) pv (sidRaw (s, SP_ROUTE));
+        routeAmtA[(size_t) s] = pv (routeAmtRaw (s));   // G1
 
         float q1 = p1A[(size_t) s];
         float q2 = pv (sidRaw (s, SP_P2));
         float q3 = pv (sidRaw (s, SP_P3));
         if (s == S_STUTTER)  q3 = pvMod (sidRaw (0, SP_P3), 7);
         if (s == S_GRANULAR) { q2 = pvMod (sidRaw (1, SP_P2), 8); q3 = pvMod (sidRaw (1, SP_P3), 9); }
-        if (s == S_CORRUPT)  { q1 = pvMod (sidRaw (3, SP_P1), 10); q2 = pvMod (sidRaw (3, SP_P2), 11); }
+        // MUSICAL (F4): fewer bits = crunchier, so DOSE pulls BITS down
+        if (s == S_CORRUPT)  { q1 = doseDown (pvMod (sidRaw (3, SP_P1), 10), dose, dosek::corruptBits);
+                               q2 = pvMod (sidRaw (3, SP_P2), 11); }
         if (s == S_FREEZE)   q3 = pvMod (sidRaw (5, SP_P3), 12);
         rack[s].setParams (q1, q2, q3);
+        rack[s].setScale (scaleLock);                       // MUSICAL (F2)
     }
 
     if (decayPhase > 0.05f)
@@ -368,7 +455,7 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
 
     // ---- run surgeons + reinject ---------------------------------
     if (wetBuf.getNumSamples() < n) wetBuf.setSize (2, n, false, false, true);
-    rack.process (specimen, wetBuf, n, mixA, routeA, reinject);
+    rack.process (specimen, wetBuf, n, mixA, routeA, routeAmtA, reinject);
     float maxAct = panic ? 1.f : rack.maxActivity();
 
     // ---- mix ----------------------------------------------------
@@ -386,7 +473,8 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     // ---- SCAR (master texture effect) --------------------------------
     if (pv (id::scarOn) > 0.5f)
     {
-        scar.process (workBuf, n, pv (id::scarDrive), pv (id::scarMix));
+        scar.process (workBuf, n, doseUp (pv (id::scarDrive), dose, dosek::scarDrive),   // MUSICAL (F4)
+                      pv (id::scarMix));
         scarWasOn = true;
     }
     else if (scarWasOn)
@@ -394,6 +482,35 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
         scar.reset();
         scarWasOn = false;
     }
+
+    // ==== EFFECTS (E1/E2) ====
+    // ---- TOURNIQUET (resonant filter) ---------------------------------
+    if (fxTqOn.get() > 0.5f)
+    {
+        tourniquet.process (workBuf, n, (int) fxTqMode.get(), fxMod (fxTqCutoff, MD_TQ_CUTOFF),
+                            fxMod (fxTqRes, MD_TQ_RES), fxTqEnv.get(), fxTqMix.get());
+        tourniquetWasOn = true;
+    }
+    else if (tourniquetWasOn)
+    {
+        tourniquet.reset();
+        tourniquetWasOn = false;
+    }
+
+    // ---- CLOT (tempo-synced stereo delay) -----------------------------
+    if (fxClotOn.get() > 0.5f)
+    {
+        clot.process (workBuf, n, spb, (int) fxClotTime.get(), fxClotFree.get(),
+                      fxMod (fxClotFeedback, MD_CLOT_FB), fxClotTone.get(), fxClotSpread.get(),
+                      fxMod (fxClotMix, MD_CLOT_MIX));
+        clotWasOn = true;
+    }
+    else if (clotWasOn)
+    {
+        clot.reset();
+        clotWasOn = false;
+    }
+    // ==== END EFFECTS (E1/E2) ====
 
     // ---- FLATLINE (hidden effect) ------------------------------------
     // Clearing the delay line is O(line length); do it once on the way out
@@ -411,6 +528,17 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
 
     main.copyFrom (0, 0, workBuf, 0, 0, n);
     if (mainCh > 1) main.copyFrom (1, 0, workBuf, 1, 0, n);
+
+    // ---- capture (F3): copy only; the file is written by a background thread
+    if (! isSuspended())
+    {
+        vsx::CaptureEngine::Clock cc;
+        cc.playing = playing;
+        cc.bpm = bpm;
+        cc.barQuarters = barQuarters;
+        cc.ppq = ppq + (double) chunkSampleOffset / spb;
+        capture.process (main.getReadPointer (0), main.getReadPointer (mainCh > 1 ? 1 : 0), n, cc);
+    }
 
     // ---- meters ----------------------------------------------
     for (int ch = 0; ch < 2; ++ch)
@@ -531,6 +659,7 @@ void VivisectProcessor::rewindToNormalized (float x)
     if (s.isNotEmpty())
         if (auto xml = juce::XmlDocument::parse (s))
         {
+            UndoScope undoStep (*this);                 // F1: one step per rewind
             restoreSoundState (juce::ValueTree::fromXml (*xml));
         }
 }
@@ -580,7 +709,11 @@ juce::Array<juce::File> VivisectProcessor::getUserPresetFiles() const
 juce::StringArray VivisectProcessor::getPresetNames() const
 {
     juce::StringArray names { "Clean Specimen", "Late 90s Bristol", "Berlin Basement",
-                              "Warp 1995", "Modern Hyperpop", "SOPHIE-adjacent" };
+                              "Warp 1995", "Modern Hyperpop", "SOPHIE-adjacent",
+                              // 0.10.0: showcase the new stages
+                              "Tourniquet Sweep", "Clot Dub Smear", "Minor Key Shrapnel",
+                              "Dose Ramp", "Feedback Ward", "Notch Ghost",
+                              "Telephone Gate", "Whole Tone Haze" };
     jassert (names.size() == numFactoryPresets);
     for (const auto& f : getUserPresetFiles())
         names.add ("* " + f.getFileNameWithoutExtension());
@@ -588,6 +721,7 @@ juce::StringArray VivisectProcessor::getPresetNames() const
 }
 void VivisectProcessor::applyPresetMap (const std::map<juce::String, float>& m)
 {
+    UndoScope undoStep (*this);                         // F1: one step per preset load
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
             rp->setValueNotifyingHost (rp->getDefaultValue());
@@ -637,6 +771,16 @@ std::map<juce::String, float> VivisectProcessor::factoryPreset (int index) const
     std::map<juce::String, float> m;
     auto set = [&] (const juce::String& k, float v) { m[k] = v; };
     auto S = [] (int i, const char* s) { return sid (i, s); };
+    // Real (un-normalised) value, for the 0.10.0 presets: Hz, ms, choice index.
+    auto real = [&] (const juce::String& k, float v)
+    {
+        if (auto* p = apvts.getParameter (k)) m[k] = p->convertTo0to1 (v);
+    };
+    auto only = [&] (std::initializer_list<int> on)       // surgeons on, everything else off
+    {
+        for (int s = 0; s < kNumSurgeons; ++s) set (S (s, "on"), 0.f);
+        for (int s : on) set (S (s, "on"), 1.f);
+    };
 
     switch (index)
     {
@@ -697,6 +841,99 @@ std::map<juce::String, float> VivisectProcessor::factoryPreset (int index) const
             set (S (S_STUTTER, "on"), 1); set (S (S_STUTTER, "mix"), 1.f); set (S (S_STUTTER, "p2"), 0.6f);
             set (S (S_REVERSE, "on"), 1); set (S (S_REVERSE, "mix"), 0.3f); set (S (S_REVERSE, "prob"), 0.2f);
             break;
+        case 6: // Tourniquet Sweep - low-pass that opens on every hit
+            set (id::chaos, 0.38f); set (id::gravityPull, 0.8f); set (id::dryWet, 0.85f);
+            set (id::triggerRate, 0.5f);
+            only ({ S_STUTTER, S_GRANULAR });
+            set (S (S_STUTTER, "mix"), 0.9f); set (S (S_STUTTER, "p2"), 0.45f);
+            set (S (S_GRANULAR, "mix"), 0.5f); set (S (S_GRANULAR, "prob"), 0.35f);
+            set (id::tqOn, 1.f); real (id::tqMode, 0); real (id::tqCutoff, 650.f);
+            set (id::tqRes, 0.6f); set (id::tqEnv, 0.75f); set (id::tqMix, 1.f);
+            real (id::outputTrim, -7.5f);   // level-matched to the other presets
+            break;
+        case 7: // Clot Dub Smear - dotted-quarter echoes smeared over reversed slices
+            set (id::chaos, 0.32f); set (id::gravityPull, 0.7f); set (id::dryWet, 0.7f);
+            set (id::triggerRate, 0.3f); set (id::reinject, 0.15f);
+            only ({ S_REVERSE, S_GRANULAR, S_FREEZE });
+            set (S (S_REVERSE, "mix"), 0.8f); set (S (S_REVERSE, "prob"), 0.45f); set (S (S_REVERSE, "p3"), 0.7f);
+            set (S (S_GRANULAR, "mix"), 0.45f); set (S (S_GRANULAR, "prob"), 0.3f);
+            set (S (S_FREEZE, "mix"), 0.4f); set (S (S_FREEZE, "prob"), 0.15f);
+            set (id::clotOn, 1.f); real (id::clotTime, 5); set (id::clotFeedback, 0.62f);
+            real (id::clotTone, 2800.f); set (id::clotSpread, 0.9f); set (id::clotMix, 0.42f);
+            set (id::tqOn, 1.f); real (id::tqMode, 0); real (id::tqCutoff, 5200.f); set (id::tqRes, 0.15f);
+            real (id::outputTrim, -3.0f);   // level-matched to the other presets
+            break;
+        case 8: // Minor Key Shrapnel - A minor pentatonic scatter, stays in tune
+            set (id::chaos, 0.5f); set (id::gravityPull, 0.75f); set (id::dryWet, 0.8f);
+            set (id::triggerRate, 0.5f);
+            only ({ S_STUTTER, S_GRANULAR, S_REVERSE });
+            set (S (S_STUTTER, "mix"), 1.f); set (S (S_STUTTER, "prob"), 0.65f);
+            set (S (S_STUTTER, "p2"), 0.7f); set (S (S_STUTTER, "p3"), 0.9f);
+            set (S (S_GRANULAR, "mix"), 0.6f); set (S (S_GRANULAR, "p1"), 0.2f); set (S (S_GRANULAR, "p2"), 0.65f);
+            set (S (S_REVERSE, "mix"), 0.45f); set (S (S_REVERSE, "prob"), 0.3f); set (S (S_REVERSE, "p3"), 0.8f);
+            set (id::scaleOn, 1.f); real (id::scaleRoot, 9); real (id::scaleType, 9); set (id::scaleRange, 0.75f);
+            real (id::outputTrim, -2.5f);   // level-matched: in-key first repeats made the stutter hotter
+            break;
+        case 9: // Dose Ramp - tame at zero, nasty at full; ride the DOSE knob
+            set (id::chaos, 0.12f); set (id::gravityPull, 0.9f); set (id::dryWet, 0.85f);
+            set (id::triggerRate, 0.15f); set (id::reinject, 0.05f);
+            only ({ S_STUTTER, S_CORRUPT, S_REORDER });
+            set (S (S_STUTTER, "mix"), 0.9f); set (S (S_STUTTER, "p2"), 0.3f);
+            set (S (S_CORRUPT, "mix"), 0.6f); set (S (S_CORRUPT, "prob"), 0.35f); set (S (S_CORRUPT, "p1"), 0.3f);
+            set (S (S_REORDER, "mix"), 0.7f); set (S (S_REORDER, "prob"), 0.3f);
+            set (id::scarOn, 1.f); set (id::scarDrive, 0.3f); set (id::scarMix, 0.4f);
+            set (id::dose, 0.45f);
+            real (id::outputTrim, -2.0f);   // level-matched to the other presets
+            break;
+        case 10: // Feedback Ward - surgeons feed each other in a ring, kept bounded by Route Amt
+            set (id::chaos, 0.42f); set (id::gravityPull, 0.65f); set (id::dryWet, 0.88f);
+            set (id::triggerRate, 0.4f); set (id::reinject, 0.2f);
+            only ({ S_STUTTER, S_GRANULAR, S_REORDER });
+            set (S (S_STUTTER, "mix"), 0.8f);
+            set (S (S_GRANULAR, "mix"), 0.55f); set (S (S_GRANULAR, "prob"), 0.4f);
+            set (S (S_REORDER, "mix"), 0.7f); set (S (S_REORDER, "prob"), 0.4f);
+            real (S (S_GRANULAR, "route"), 1); real (S (S_GRANULAR, "routeAmt"), 0.55f);
+            real (S (S_REORDER, "route"), 2);  real (S (S_REORDER, "routeAmt"), 0.7f);
+            real (S (S_STUTTER, "route"), 5);  real (S (S_STUTTER, "routeAmt"), 0.35f);
+            break;
+        case 11: // Notch Ghost - sparse freeze pads with a swept notch and triplet echoes
+            set (id::chaos, 0.25f); set (id::gravityPull, 0.6f); set (id::dryWet, 0.65f);
+            set (id::triggerRate, 0.2f);
+            only ({ S_FREEZE, S_REVERSE });
+            set (S (S_FREEZE, "mix"), 0.7f); set (S (S_FREEZE, "prob"), 0.3f); set (S (S_FREEZE, "p3"), 0.5f);
+            set (S (S_REVERSE, "mix"), 0.5f); set (S (S_REVERSE, "prob"), 0.25f);
+            set (id::tqOn, 1.f); real (id::tqMode, 3); real (id::tqCutoff, 1800.f);
+            set (id::tqRes, 0.7f); set (id::tqEnv, -0.5f); set (id::tqMix, 1.f);
+            set (id::clotOn, 1.f); real (id::clotTime, 1); set (id::clotFeedback, 0.5f);
+            real (id::clotTone, 3500.f); set (id::clotSpread, 0.75f); set (id::clotMix, 0.3f);
+            real (id::outputTrim, -2.5f);   // level-matched to the other presets
+            break;
+        case 12: // Telephone Gate - band-limited crunch with tight 1/16 slap
+            set (id::chaos, 0.55f); set (id::gravityPull, 0.85f); set (id::dryWet, 0.9f);
+            set (id::triggerRate, 0.55f);
+            only ({ S_STUTTER, S_CORRUPT });
+            set (S (S_STUTTER, "mix"), 1.f); set (S (S_STUTTER, "prob"), 0.7f); set (S (S_STUTTER, "p2"), 0.8f);
+            set (S (S_CORRUPT, "mix"), 0.85f); set (S (S_CORRUPT, "prob"), 0.5f);
+            set (S (S_CORRUPT, "p1"), 0.55f); set (S (S_CORRUPT, "p3"), 0.3f);
+            set (id::tqOn, 1.f); real (id::tqMode, 1); real (id::tqCutoff, 1700.f);
+            set (id::tqRes, 0.45f); set (id::tqMix, 1.f);
+            set (id::clotOn, 1.f); real (id::clotTime, 0); set (id::clotFeedback, 0.25f);
+            real (id::clotTone, 3000.f); set (id::clotSpread, 0.3f); set (id::clotMix, 0.25f);
+            break;
+        case 13: // Whole Tone Haze - dense dreamy grains in D whole tone, long echoes
+            set (id::chaos, 0.4f); set (id::gravityPull, 0.5f); set (id::dryWet, 0.75f);
+            set (id::triggerRate, 0.45f); set (id::reinject, 0.3f);
+            only ({ S_GRANULAR, S_FREEZE, S_STUTTER });
+            set (S (S_GRANULAR, "mix"), 0.8f); set (S (S_GRANULAR, "prob"), 0.7f);
+            set (S (S_GRANULAR, "p1"), 0.3f); set (S (S_GRANULAR, "p2"), 0.8f); set (S (S_GRANULAR, "p3"), 0.5f);
+            set (S (S_FREEZE, "mix"), 0.5f); set (S (S_FREEZE, "prob"), 0.2f); set (S (S_FREEZE, "p3"), 0.8f);
+            set (S (S_STUTTER, "mix"), 0.4f); set (S (S_STUTTER, "prob"), 0.3f); set (S (S_STUTTER, "p3"), 0.8f);
+            set (id::scaleOn, 1.f); real (id::scaleRoot, 2); real (id::scaleType, 11); set (id::scaleRange, 0.6f);
+            set (id::tqOn, 1.f); real (id::tqMode, 2); real (id::tqCutoff, 250.f); set (id::tqRes, 0.2f);
+            set (id::clotOn, 1.f); real (id::clotTime, 6); set (id::clotFeedback, 0.7f);
+            real (id::clotTone, 2200.f); set (id::clotSpread, 1.f); set (id::clotMix, 0.45f);
+            real (id::outputTrim, -4.0f);   // level-matched to the other presets
+            break;
         default: // Clean Specimen — defaults
             break;
     }
@@ -754,6 +991,8 @@ void VivisectProcessor::setStateInformation (const void* data, int size)
             if (samples.isValid())
                 state.removeChild (samples, nullptr);
 
+            defaultAbsentNewParams (apvts, state);
+
             apvts.replaceState (state);
             syncFromStateTree();
 
@@ -808,6 +1047,32 @@ void VivisectProcessor::setUiScale (float s)
         settingsTree().setProperty (kUiScaleProp, juce::jlimit (0.5f, 1.5f, s), nullptr);
 }
 
+// ==== MUSICAL (F4) ==== Simple view + first-run hint are user settings: they live in
+// VSX_SETTINGS, so presets, A/B, history, RANDOM and MUTATE never touch them. A
+// session saved before 0.10 has no `simpleView` property and therefore restores OFF.
+static const juce::Identifier kSimpleViewProp { "simpleView" };
+static const juce::Identifier kHintDoneProp   { "hintDismissed" };
+
+bool VivisectProcessor::simpleViewEnabled() const
+{
+    const auto t = apvts.state.getChildWithName (kSettingsTag);
+    return t.isValid() ? (bool) t.getProperty (kSimpleViewProp, false) : false;
+}
+void VivisectProcessor::setSimpleViewEnabled (bool on)
+{
+    settingsTree().setProperty (kSimpleViewProp, on, nullptr);
+}
+bool VivisectProcessor::firstRunHintDismissed() const
+{
+    const auto t = apvts.state.getChildWithName (kSettingsTag);
+    return t.isValid() ? (bool) t.getProperty (kHintDoneProp, false) : false;
+}
+void VivisectProcessor::setFirstRunHintDismissed (bool done)
+{
+    settingsTree().setProperty (kHintDoneProp, done, nullptr);
+}
+// ==== end MUSICAL (F4) ====
+
 juce::ValueTree VivisectProcessor::soundStateSnapshot()
 {
     auto state = apvts.copyState();
@@ -831,6 +1096,9 @@ void VivisectProcessor::restoreSoundState (const juce::ValueTree& source)
     if (currentSettings.isValid())
         next.addChild (currentSettings.createCopy(), -1, nullptr);
 
+    // Snapshots from before 0.10.0 carry no entry for the new parameters; load those at
+    // their defaults rather than leaving stale values behind.
+    defaultAbsentNewParams (apvts, next);
     apvts.replaceState (next);
 }
 
@@ -1012,6 +1280,30 @@ juce::String VivisectProcessor::buildTroubleshootingReport() const
       << "slot B      : " << (slotHasSample (1) ? "loaded" : "empty") << "\n";
     nl();
 
+    r << "-- FEATURES (0.10.0) ------------------------------------------\n";
+    {
+        const auto txt = [this] (const char* pid) -> juce::String
+        {
+            if (auto* p = apvts.getParameter (pid)) return p->getCurrentValueAsText();
+            return "?";
+        };
+        r << "scale lock  : " << txt (id::scaleOn) << ", root " << txt (id::scaleRoot)
+          << ", " << txt (id::scaleType) << ", range " << txt (id::scaleRange) << "\n"
+          << "dose        : " << txt (id::dose) << "\n"
+          << "tourniquet  : " << txt (id::tqOn) << ", " << txt (id::tqMode) << ", cutoff " << txt (id::tqCutoff)
+          << ", reso " << txt (id::tqRes) << ", env " << txt (id::tqEnv) << ", mix " << txt (id::tqMix) << "\n"
+          << "clot        : " << txt (id::clotOn) << ", time " << txt (id::clotTime) << ", feedback "
+          << txt (id::clotFeedback) << ", mix " << txt (id::clotMix) << "\n"
+          << "simple view : " << (simpleViewEnabled() ? "on" : "off") << "\n"
+          << "first-run hint dismissed: " << (firstRunHintDismissed() ? "yes" : "no") << "\n"
+          << "undo / redo : " << undoDepth() << " / " << redoDepth() << " steps\n"
+          << "capture     : " << vsx::describeCaptureState (capture.info()) << ", length setting "
+          << captureBars() << " bar(s)\n"
+          << "captures    : " << capture.directory().getFullPathName() << " ("
+          << capture.list().size() << " take(s))\n";
+    }
+    nl();
+
     r << "-- SYSTEM -----------------------------------------------------\n"
       << "os          : " << juce::SystemStats::getOperatingSystemName() << "\n"
       << "cpu         : " << juce::SystemStats::getCpuModel() << "\n"
@@ -1129,6 +1421,8 @@ void VivisectProcessor::hardResetAllSettings()
     // Rebuild documented defaults immediately. A hard reset should leave the
     // plugin usable now, not only after the next state reload.
     seedDefaultMidiMap();
+    setSimpleViewEnabled (true);        // MUSICAL (F4): back to fresh-install defaults
+    setFirstRunHintDismissed (false);
 
     // 4. forget loaded samples and the A/B snapshots
     clearSampleSlot (0);
@@ -1144,6 +1438,9 @@ void VivisectProcessor::hardResetAllSettings()
         cache.deleteRecursively();
 
     lastPresetFile = juce::File();
+
+    // 6. a clean slate has nothing to undo back into (F1)
+    clearUndoHistory();
 }
 
 // ===========================================================================
@@ -1284,6 +1581,7 @@ void VivisectProcessor::clearParameterLocks()
 // ===========================================================================
 void VivisectProcessor::resetAllToDefaults()
 {
+    UndoScope undoStep (*this);                         // F1
     for (auto* p : getParameters())
         if (auto* rp = dynamic_cast<juce::RangedAudioParameter*> (p))
             rp->setValueNotifyingHost (rp->getDefaultValue());
@@ -1292,6 +1590,7 @@ void VivisectProcessor::resetAllToDefaults()
 
 void VivisectProcessor::randomizeAll()
 {
+    UndoScope undoStep (*this);                         // F1
     // Utility and routing state are not part of the generated sound. Preserve
     // them when subsequent RANDOM presses reset the creative parameters first.
     std::map<juce::String, float> preserved;
@@ -1300,7 +1599,8 @@ void VivisectProcessor::randomizeAll()
         for (const auto& pid : { id::inputTrim, id::outputTrim, id::bufferBars,
                                  id::sourceSel, id::midiMode, id::panicFreeze,
                                  id::decayArm, id::decayTime, id::flatOn,
-                                 id::flatTone, id::flatBleed, id::flatMix })
+                                 id::flatTone, id::flatBleed, id::flatMix,
+                                 id::scaleRoot, id::scaleType })       // MUSICAL (F2): the song's key
             if (auto* p = apvts.getParameter (pid))
                 preserved[pid] = p->getValue();
 
@@ -1347,6 +1647,27 @@ void VivisectProcessor::randomizeAll()
     setNorm   (id::scarOn,         rng.nextFloat() < 0.35f ? 1.f : 0.f);
     setNorm   (id::scarDrive,      rr (0.08f, 0.82f));
     setNorm   (id::scarMix,        rr (0.15f, 0.72f));
+    // ==== MUSICAL (F2/F4) ==== root and type are the song's key: RANDOM leaves them alone
+    setNorm   (id::scaleOn,        rng.nextFloat() < 0.30f ? 1.f : 0.f);
+    setNorm   (id::scaleRange,     rr (0.10f, 0.80f));
+    setNorm   (id::dose,           rr (0.f, 0.60f));
+    // ==== end MUSICAL (F2/F4) ====
+
+    // ==== EFFECTS (E1/E2) ====
+    setNorm   (id::tqOn,           rng.nextFloat() < 0.30f ? 1.f : 0.f);
+    setChoice (id::tqMode,         rng.nextInt (4));
+    setNorm   (id::tqCutoff,       rr (0.25f, 0.85f));
+    setNorm   (id::tqRes,          rr (0.05f, 0.75f));
+    setNorm   (id::tqEnv,          rr (0.30f, 0.80f));
+    setNorm   (id::tqMix,          rr (0.60f, 1.f));
+    setNorm   (id::clotOn,         rng.nextFloat() < 0.30f ? 1.f : 0.f);
+    setChoice (id::clotTime,       rng.nextInt (9));
+    setNorm   (id::clotFree,       rr (0.10f, 0.80f));
+    setNorm   (id::clotFeedback,   rr (0.10f, 0.70f));
+    setNorm   (id::clotTone,       rr (0.35f, 0.90f));
+    setNorm   (id::clotSpread,     rr (0.f, 1.f));
+    setNorm   (id::clotMix,        rr (0.10f, 0.50f));
+    // ==== END EFFECTS (E1/E2) ====
 
     bool anyOn = false;
     juce::Array<int> eligibleOn;
@@ -1372,6 +1693,7 @@ void VivisectProcessor::randomizeAll()
         setNorm   (sid (s, "p2"),   rr (0.f, 1.f));
         setNorm   (sid (s, "p3"),   rr (0.f, 1.f));
         setChoice (sid (s, "route"), rng.nextFloat() < 0.18f ? 1 + rng.nextInt (kNumSurgeons) : 0);
+        setNorm   (sid (s, "routeAmt"), rr (0.2f, 0.8f));   // G1
     }
     if (! anyOn && ! eligibleOn.isEmpty())
         setNorm (sid (eligibleOn[rng.nextInt (eligibleOn.size())], "on"), 1.f);
@@ -1399,7 +1721,8 @@ void VivisectProcessor::mutateCurrent()
     auto* amountParam = apvts.getParameter (id::mutationAmount);
     if (amountParam == nullptr) return;
     const float amount = juce::jlimit (0.f, 1.f, amountParam->getValue());
-    if (amount <= 0.f) return;
+    if (amount <= 0.f) return;                          // changes nothing, so records nothing
+    UndoScope undoStep (*this);                         // F1
 
     auto mutateContinuous = [this, amount] (const juce::String& pid, float scale = 0.35f)
     {
@@ -1431,9 +1754,16 @@ void VivisectProcessor::mutateCurrent()
     for (auto pid : { id::chaos, id::gravityPull, id::swing, id::dryWet,
                       id::triggerRate, id::reinject, id::analysisInform, id::morph,
                       id::scAmount, id::scarDrive, id::scarMix, id::lfo1Rate,
-                      id::lfo2Rate, id::macro1, id::macro2 })
+                      id::lfo2Rate, id::macro1, id::macro2,
+                      // ==== EFFECTS (E1/E2) ====
+                      id::tqCutoff, id::tqRes, id::tqEnv, id::tqMix,
+                      id::clotFree, id::clotFeedback, id::clotTone, id::clotSpread, id::clotMix,
+                      id::scaleRange, id::dose })   // MUSICAL (F2/F4)
+
         mutateContinuous (pid);
 
+    mutateChoice (id::tqMode);        // ==== EFFECTS (E1/E2) ====
+    mutateChoice (id::clotTime);
     mutateChoice (id::gravityGrid);
     mutateChoice (id::lfo1Shape);
     mutateChoice (id::lfo2Shape);
@@ -1460,6 +1790,7 @@ void VivisectProcessor::mutateCurrent()
         mutateContinuous (sid (s, "p2"));
         mutateContinuous (sid (s, "p3"));
         mutateChoice (sid (s, "route"));
+        mutateContinuous (sid (s, "routeAmt"));   // G1
     }
 
     if (! anyOn && ! eligibleOn.isEmpty())
@@ -1473,6 +1804,19 @@ void VivisectProcessor::mutateCurrent()
         mutateChoice (pre + "dst");
         mutateContinuous (pre + "depth");
     }
+
+    // On/off switches (SCAR and the effect stages) flip only at high amounts.
+    for (auto onPid : { id::scarOn, id::tqOn, id::clotOn })     // ==== EFFECTS (E1/E2) ====
+        if (amount >= 0.70f && ! isParameterLocked (onPid)
+            && rng.nextFloat() < (amount - 0.70f) * 0.30f)
+            if (auto* p = apvts.getParameter (onPid))
+                p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.f : 1.f);
+    // ==== MUSICAL (F2) ====
+    if (amount >= 0.70f && ! isParameterLocked (id::scaleOn)
+        && rng.nextFloat() < (amount - 0.70f) * 0.30f)
+        if (auto* p = apvts.getParameter (id::scaleOn))
+            p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.f : 1.f);
+    // ==== end MUSICAL (F2) ====
 
     if (amount >= 0.70f && ! isParameterLocked (id::scarOn)
         && rng.nextFloat() < (amount - 0.70f) * 0.30f)
@@ -1488,6 +1832,7 @@ void VivisectProcessor::selectABSlot (int slot)
     slot = juce::jlimit (0, 1, slot);
     if (slot == abSlot) return;
 
+    UndoScope undoStep (*this);                         // F1: one step per A/B swap
     abState[abSlot] = soundStateSnapshot();        // park sonic state only
     if (abState[slot].isValid())
     {
@@ -1524,6 +1869,7 @@ bool VivisectProcessor::loadPresetFromFile (const juce::File& f)
     if (! f.existsAsFile()) return false;
     auto xml = juce::XmlDocument::parse (f);
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return false;
+    UndoScope undoStep (*this);                         // F1: one step per preset load
     restoreSoundState (juce::ValueTree::fromXml (*xml));
     lastPresetFile = f;
     return true;
@@ -1583,6 +1929,206 @@ bool VivisectProcessor::exportSpecimenToWav (const juce::File& f, int bitDepth,
         *secondsWritten = (double) n / juce::jmax (1.0, sr);
     return ok;
 }
+
+// ===========================================================================
+//  Undo / redo (F1)
+//
+//  Same scope as A/B: sound parameters only. Each snapshot keeps the exact
+//  normalised value of every parameter next to the sound-state tree, so a
+//  restore is bit-exact even where the tree round trip (real value text and
+//  back) would not be.
+// ===========================================================================
+std::vector<float> VivisectProcessor::currentNormalised() const
+{
+    const auto& all = getParameters();
+    std::vector<float> v;
+    v.reserve ((size_t) all.size());
+    for (auto* p : all)
+        v.push_back (p->getValue());
+    return v;
+}
+
+VivisectProcessor::UndoSnapshot VivisectProcessor::captureUndoSnapshot()
+{
+    UndoSnapshot s;
+    s.norm = currentNormalised();
+    s.tree = soundStateSnapshot();
+    return s;
+}
+
+void VivisectProcessor::applyUndoSnapshot (const UndoSnapshot& snap)
+{
+    ++undoScopeDepth;                       // our own edits are not new steps
+    restoreSoundState (snap.tree);
+    const auto& all = getParameters();
+    if ((size_t) all.size() == snap.norm.size())
+        for (int i = 0; i < all.size(); ++i)
+            if (all[i]->getValue() != snap.norm[(size_t) i])
+                all[i]->setValueNotifyingHost (snap.norm[(size_t) i]);
+    --undoScopeDepth;
+    gestureDepth = 0;
+    gestureStart.reset();
+}
+
+void VivisectProcessor::pushUndoSnapshot()
+{
+    auto snap = captureUndoSnapshot();
+    const juce::ScopedLock sl (undoLock);
+    undoStack.push_back (std::move (snap));
+    while ((int) undoStack.size() > kUndoDepth)
+        undoStack.pop_front();
+    redoStack.clear();                      // a new edit ends the redo branch
+}
+
+bool VivisectProcessor::undo()
+{
+    commitOpenUndoGesture();    // Ctrl+Z during a drag undoes that drag, not the step before it
+    UndoSnapshot target;
+    {
+        const juce::ScopedLock sl (undoLock);
+        if (undoStack.empty()) return false;
+        target = std::move (undoStack.back());
+        undoStack.pop_back();
+    }
+    auto now = captureUndoSnapshot();
+    {
+        const juce::ScopedLock sl (undoLock);
+        redoStack.push_back (std::move (now));
+        while ((int) redoStack.size() > kUndoDepth) redoStack.pop_front();
+    }
+    applyUndoSnapshot (target);
+    return true;
+}
+
+bool VivisectProcessor::redo()
+{
+    commitOpenUndoGesture();
+    UndoSnapshot target;
+    {
+        const juce::ScopedLock sl (undoLock);
+        if (redoStack.empty()) return false;
+        target = std::move (redoStack.back());
+        redoStack.pop_back();
+    }
+    auto now = captureUndoSnapshot();
+    {
+        const juce::ScopedLock sl (undoLock);
+        undoStack.push_back (std::move (now));      // redo must not clear the redo stack
+        while ((int) undoStack.size() > kUndoDepth) undoStack.pop_front();
+    }
+    applyUndoSnapshot (target);
+    return true;
+}
+
+bool VivisectProcessor::canUndo() const { const juce::ScopedLock sl (undoLock); return ! undoStack.empty(); }
+bool VivisectProcessor::canRedo() const { const juce::ScopedLock sl (undoLock); return ! redoStack.empty(); }
+int  VivisectProcessor::undoDepth() const { const juce::ScopedLock sl (undoLock); return (int) undoStack.size(); }
+int  VivisectProcessor::redoDepth() const { const juce::ScopedLock sl (undoLock); return (int) redoStack.size(); }
+
+void VivisectProcessor::clearUndoHistory()
+{
+    const juce::ScopedLock sl (undoLock);
+    undoStack.clear();
+    redoStack.clear();
+    gestureDepth = 0;
+    gestureStart.reset();
+}
+
+void VivisectProcessor::commitOpenUndoGesture()
+{
+    if (gestureDepth > 0 && gestureStart.has_value() && gestureStart->norm != currentNormalised())
+    {
+        const juce::ScopedLock sl (undoLock);
+        undoStack.push_back (std::move (*gestureStart));
+        while ((int) undoStack.size() > kUndoDepth) undoStack.pop_front();
+        redoStack.clear();
+    }
+    gestureDepth = 0;
+    gestureStart.reset();
+}
+
+// "Undo: Chaos 0.40 -> 0.12" when one control differs, a count when several.
+juce::String VivisectProcessor::describeUndoStep (const UndoSnapshot& target, const char* verb) const
+{
+    const auto now = currentNormalised();
+    const auto& all = getParameters();
+    int changed = 0, first = -1;
+    if (now.size() == target.norm.size())
+        for (size_t i = 0; i < now.size(); ++i)
+            if (now[i] != target.norm[i]) { if (first < 0) first = (int) i; ++changed; }
+
+    const juce::String head = juce::String (verb) + ": ";
+    if (changed == 0)  return head + "last action";
+    if (changed > 1)   return head + juce::String (changed) + " controls";
+    auto* p = all[first];
+    return head + p->getName (24) + " " + p->getText (now[(size_t) first], 12)
+         + " -> " + p->getText (target.norm[(size_t) first], 12);
+}
+
+juce::String VivisectProcessor::undoLabel() const
+{
+    const juce::ScopedLock sl (undoLock);
+    return undoStack.empty() ? juce::String ("Undo: nothing to undo")
+                             : describeUndoStep (undoStack.back(), "Undo");
+}
+juce::String VivisectProcessor::redoLabel() const
+{
+    const juce::ScopedLock sl (undoLock);
+    return redoStack.empty() ? juce::String ("Redo: nothing to redo")
+                             : describeUndoStep (redoStack.back(), "Redo");
+}
+
+// One undo step per completed UI gesture. beginChangeGesture arrives before the
+// first value change, so that is the state to return to; a gesture that ended
+// where it started (a click without a move) adds nothing. Host automation never
+// opens a gesture here, and actions that push their own step are skipped.
+void VivisectProcessor::UndoGestureListener::parameterGestureChanged (int, bool starting)
+{
+    auto& o = owner;
+    if (o.undoScopeDepth > 0) return;
+    if (starting)
+    {
+        if (o.gestureDepth++ == 0)
+            o.gestureStart = o.captureUndoSnapshot();
+    }
+    else if (o.gestureDepth > 0 && --o.gestureDepth == 0)
+    {
+        if (o.gestureStart.has_value() && o.gestureStart->norm != o.currentNormalised())
+        {
+            const juce::ScopedLock sl (o.undoLock);
+            o.undoStack.push_back (std::move (*o.gestureStart));
+            while ((int) o.undoStack.size() > kUndoDepth) o.undoStack.pop_front();
+            o.redoStack.clear();
+        }
+        o.gestureStart.reset();
+    }
+}
+
+// ===========================================================================
+//  Capture (F3)
+// ===========================================================================
+static const juce::Identifier kCaptureBarsProp { "captureBars" };
+
+int VivisectProcessor::captureBars() const
+{
+    const auto t = apvts.state.getChildWithName (kSettingsTag);
+    const int b = t.isValid() ? (int) t.getProperty (kCaptureBarsProp, 4) : 4;
+    return vsx::capture::isValidBars (b) ? b : 4;
+}
+
+void VivisectProcessor::setCaptureBars (int bars)
+{
+    if (vsx::capture::isValidBars (bars) && bars != captureBars())
+        settingsTree().setProperty (kCaptureBarsProp, bars, nullptr);
+}
+
+bool VivisectProcessor::startCapture (int bars)
+{
+    if (isSuspended()) return false;        // never records while suspended
+    return capture.start (bars);
+}
+
+void VivisectProcessor::cancelCapture() { capture.cancel(); }
 
 juce::AudioProcessorEditor* VivisectProcessor::createEditor() { return new VivisectEditor (*this); }
 

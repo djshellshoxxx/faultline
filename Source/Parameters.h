@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <array>
 #include <memory>
 
 // ============================================================================
@@ -39,6 +40,31 @@ namespace id
     constexpr auto scarDrive       = "scarDrive";
     constexpr auto scarMix         = "scarMix";
 
+    // ==== EFFECTS (E1/E2) ====
+    // TOURNIQUET (resonant filter) and CLOT (tempo-synced stereo delay):
+    // post-rack effects, SCAR -> TOURNIQUET -> CLOT -> FLATLINE.
+    constexpr auto tqOn            = "tqOn";
+    constexpr auto tqMode          = "tqMode";
+    constexpr auto tqCutoff        = "tqCutoff";
+    constexpr auto tqRes           = "tqRes";
+    constexpr auto tqEnv           = "tqEnv";
+    constexpr auto tqMix           = "tqMix";
+    constexpr auto clotOn          = "clotOn";
+    constexpr auto clotTime        = "clotTime";
+    constexpr auto clotFree        = "clotFree";
+    constexpr auto clotFeedback    = "clotFeedback";
+    constexpr auto clotTone        = "clotTone";
+    constexpr auto clotSpread      = "clotSpread";
+    constexpr auto clotMix         = "clotMix";
+    // ==== END EFFECTS (E1/E2) ====
+    // ==== MUSICAL (F2/F4) ====
+    constexpr auto scaleOn         = "scaleOn";
+    constexpr auto scaleRoot       = "scaleRoot";
+    constexpr auto scaleType       = "scaleType";
+    constexpr auto scaleRange      = "scaleRange";
+    constexpr auto dose            = "dose";
+    // ==== end MUSICAL (F2/F4) ====
+
     // --- FLATLINE: the hidden effect behind the corner notch ----------------
     constexpr auto flatOn         = "flatOn";
     constexpr auto flatTone       = "flatTone";
@@ -58,6 +84,40 @@ namespace id
     constexpr auto macro1    = "macro1";
     constexpr auto macro2    = "macro2";
 }
+
+// ==== MUSICAL (F2/F4) ====
+inline juce::StringArray scaleRootNames()
+{
+    return { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+}
+inline juce::StringArray scaleTypeNames()
+{
+    return { "Chromatic", "Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
+             "Harm. Minor", "Maj Pentatonic", "Min Pentatonic", "Blues", "Whole Tone" };
+}
+
+// DOSE (F4): x_eff = x + dose * k * (1 - x), or x - dose * k * x for Gravity Pull.
+// Identity at dose 0; monotonic in dose; clamped to 0..1.
+namespace dosek
+{
+    constexpr float chaos = 0.60f, triggerRate = 0.50f, reinject = 0.25f,
+                    corruptBits = 0.50f, scarDrive = 0.40f, gravityPull = 0.30f;
+}
+inline float doseUp (float x, float dose, float k) noexcept
+{
+    if (dose <= 0.f) return x;                       // exact identity
+    const float d = dose > 1.f ? 1.f : dose;
+    const float y = x + d * k * (1.f - x);
+    return y < 0.f ? 0.f : (y > 1.f ? 1.f : y);
+}
+inline float doseDown (float x, float dose, float k) noexcept
+{
+    if (dose <= 0.f) return x;
+    const float d = dose > 1.f ? 1.f : dose;
+    const float y = x - d * k * x;
+    return y < 0.f ? 0.f : (y > 1.f ? 1.f : y);
+}
+// ==== end MUSICAL (F2/F4) ====
 
 inline juce::String surgeonTag (int i)
 {
@@ -83,6 +143,17 @@ inline const char* sidRaw (int surgeon, SurgeonParameter parameter) noexcept
     const int p = juce::jlimit (0, 6, (int) parameter);
     return ids[s][p];
 }
+
+// ==== ROUTING (G1) ====
+// Per-surgeon amount for the Route In source (0..1, default 0.5 = the fixed
+// gain 0.5 that Route In always used, so older sessions sound identical).
+inline const char* routeAmtRaw (int surgeon) noexcept
+{
+    static constexpr const char* ids[kNumSurgeons] {
+        "st_routeAmt", "gr_routeAmt", "rv_routeAmt", "cr_routeAmt", "ro_routeAmt", "fz_routeAmt" };
+    return ids[juce::jlimit (0, kNumSurgeons - 1, surgeon)];
+}
+// ==== END ROUTING (G1) ====
 
 inline const char* surgeonName (int i)
 {
@@ -110,8 +181,25 @@ inline juce::StringArray modSourceNames()
 inline juce::StringArray modDestNames()
 {
     return { "Off", "Chaos", "Grav Pull", "Swing", "Trig Rate", "Reinject", "Morph",
-             "St Drift", "Gr Density", "Gr Spray", "Cr Bits", "Cr Rate", "Fz Blur" };
+             "St Drift", "Gr Density", "Gr Spray", "Cr Bits", "Cr Rate", "Fz Blur",
+             // ==== EFFECTS (E1/E2) ==== appended last so saved indices never move
+             "TQ Cutoff", "TQ Resonance", "Clot Feedback", "Clot Mix" };
 }
+
+// ==== EFFECTS (E1/E2) ====
+// Mod destination enums (indices into modDestNames()) for the effect stages.
+enum EffectsModDest { MD_TQ_CUTOFF = 13, MD_TQ_RES = 14, MD_CLOT_FB = 15, MD_CLOT_MIX = 16 };
+
+// Every effect parameter, for RANDOM / MUTATE / state-upgrade loops.
+inline const std::array<const char*, 13>& effectsParamIds()
+{
+    static const std::array<const char*, 13> ids {
+        id::tqOn, id::tqMode, id::tqCutoff, id::tqRes, id::tqEnv, id::tqMix,
+        id::clotOn, id::clotTime, id::clotFree, id::clotFeedback, id::clotTone,
+        id::clotSpread, id::clotMix };
+    return ids;
+}
+// ==== END EFFECTS (E1/E2) ====
 
 // ----------------------------------------------------------------------------
 inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
@@ -189,6 +277,41 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         p.add (std::make_unique<F> (pid ((pre + "depth").toRawUTF8()), "Mod " + juce::String (m + 1) + " Depth",
             juce::NormalisableRange<float> { -1.f, 1.f, 0.0001f }, 0.f));
     }
+
+    // ==== EFFECTS (E1/E2) ====
+    // Every 0.10.0 parameter (effects, then scale/dose, then route amounts) is appended after
+    // the 0.9.3 layout so no existing parameter index shifts (LV2 ports and CC maps key on it).
+    p.add (std::make_unique<B> (pid (id::tqOn), "Tourniquet", false));
+    p.add (std::make_unique<C> (pid (id::tqMode), "TQ Mode",
+        juce::StringArray { "Low-pass", "Band-pass", "High-pass", "Notch" }, 0));
+    p.add (std::make_unique<F> (pid (id::tqCutoff), "TQ Cutoff", R { 20.f, 20000.f, 0.01f, 0.3f }, 1200.f));
+    p.add (std::make_unique<F> (pid (id::tqRes), "TQ Resonance", R { 0.f, 1.f, 0.0001f }, 0.25f));
+    p.add (std::make_unique<F> (pid (id::tqEnv), "TQ Env", R { -1.f, 1.f, 0.0001f }, 0.f));
+    p.add (std::make_unique<F> (pid (id::tqMix), "TQ Mix", R { 0.f, 1.f, 0.0001f }, 1.f));
+
+    p.add (std::make_unique<B> (pid (id::clotOn), "Clot", false));
+    p.add (std::make_unique<C> (pid (id::clotTime), "Clot Time",
+        juce::StringArray { "1/16", "1/8T", "1/8", "1/8.", "1/4", "1/4.", "1/2", "1/1", "Free" }, 2));
+    p.add (std::make_unique<F> (pid (id::clotFree), "Clot Free", R { 20.f, 2000.f, 0.1f, 0.5f }, 375.f));
+    p.add (std::make_unique<F> (pid (id::clotFeedback), "Clot Feedback", R { 0.f, 0.95f, 0.0001f }, 0.45f));
+    p.add (std::make_unique<F> (pid (id::clotTone), "Clot Tone", R { 200.f, 16000.f, 0.1f, 0.3f }, 5000.f));
+    p.add (std::make_unique<F> (pid (id::clotSpread), "Clot Spread", R { 0.f, 1.f, 0.0001f }, 0.6f));
+    p.add (std::make_unique<F> (pid (id::clotMix), "Clot Mix", R { 0.f, 1.f, 0.0001f }, 0.3f));
+    // ==== END EFFECTS (E1/E2) ====
+
+    // ==== MUSICAL (F2/F4) ====
+    p.add (std::make_unique<B> (pid (id::scaleOn), "Scale Lock", false));
+    p.add (std::make_unique<C> (pid (id::scaleRoot), "Scale Root", scaleRootNames(), 0));
+    p.add (std::make_unique<C> (pid (id::scaleType), "Scale Type", scaleTypeNames(), 2));
+    p.add (std::make_unique<F> (pid (id::scaleRange), "Scale Range", R { 0.f, 1.f, 0.0001f }, 0.35f));
+    p.add (std::make_unique<F> (pid (id::dose), "Dose", R { 0.f, 1.f, 0.0001f }, 0.f));
+    // ==== end MUSICAL (F2/F4) ====
+
+    // ==== ROUTING (G1) ====
+    for (int s = 0; s < kNumSurgeons; ++s)
+        p.add (std::make_unique<F> (pid (sid (s, "routeAmt").toRawUTF8()),
+                                    juce::String (surgeonName (s)) + " Route Amt", R { 0.f, 1.f, 0.0001f }, 0.5f));
+    // ==== END ROUTING (G1) ====
 
     return p;
 }

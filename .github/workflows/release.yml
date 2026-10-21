@@ -1,10 +1,17 @@
 name: Release builds
 
-# Builds VST3, CLAP and Standalone for Windows and Linux (plus LV2 on Linux),
-# runs the headless test harness against the exact shipping code, and uploads
-# zipped packages as workflow artifacts. The zips are published as a GitHub
-# Release when a tag such as v0.9.3 is pushed, or when main is pushed with a
-# version in CMakeLists.txt that has no release yet (the tag is created then).
+# Four parts:
+#   plan     picks which platform builds this event needs
+#   tests    headless harness (VivisectTests), Linux + Windows, run exactly once
+#   build    per-platform plug-in packaging, tests OFF, no test run
+#   publish  needs tests + build; pushes only; creates a GitHub PRE-RELEASE
+#
+# Pull requests are kept cheap: tests (Linux + Windows) and the Linux build.
+# Pushes to main, tags and manual runs build every platform.
+#
+# Release tag: v<CMake VERSION>-beta.<N>, where N is the number in
+# release-beta.txt (default 1). Bump that file to cut another beta of the same
+# version. Pushing a tag such as v0.10.0-beta.2 by hand publishes that tag.
 
 on:
   push:
@@ -14,47 +21,95 @@ on:
       - 'v*'
   pull_request:
   workflow_dispatch:
+    inputs:
+      rebuild:
+        description: 'Ignore the compile cache and rebuild everything (refreshes the cache)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LINUX_DEPS: >-
+    build-essential cmake ninja-build pkg-config
+    libasound2-dev libfreetype-dev libfontconfig1-dev
+    libx11-dev libxext-dev libxrandr-dev libxinerama-dev
+    libxcursor-dev libxcomposite-dev libgl1-mesa-dev
+
 jobs:
-  build:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo 'matrix={"include":[{"name":"linux-x64","os":"ubuntu-22.04","arch":""}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"name":"windows-x64","os":"windows-latest","arch":""},{"name":"linux-x64","os":"ubuntu-22.04","arch":""},{"name":"macos-arm64","os":"macos-14","arch":"arm64"},{"name":"macos-x86_64","os":"macos-14","arch":"x86_64"}]}' >> "$GITHUB_OUTPUT"
+          fi
+
+  tests:
+    name: tests (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            name: windows-x64
-          - os: ubuntu-22.04
-            name: linux-x64
+        os: [ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Fetch cache location
+        run: echo "FC_DIR=$(echo "$GITHUB_WORKSPACE" | sed 's#\\#/#g')/.fetchcontent" >> "$GITHUB_ENV"
+
+      - name: Cache FetchContent downloads (JUCE)
+        uses: actions/cache@v4
+        with:
+          path: .fetchcontent
+          key: fetchcontent-tests-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Force rebuild
+        if: ${{ inputs.rebuild }}
+        run: echo "CCACHE_RECACHE=1" >> "$GITHUB_ENV"
+
+      - name: Compile cache (Linux)
+        if: runner.os == 'Linux'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: tests-${{ matrix.os }}
 
       - name: Install JUCE build dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake ninja-build pkg-config \
-            libasound2-dev libfreetype-dev libfontconfig1-dev \
-            libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
-            libxcursor-dev libxcomposite-dev libgl1-mesa-dev
+          sudo apt-get install -y $LINUX_DEPS
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         # No -G: CMake picks the newest Visual Studio on the runner image.
-        run: cmake -S . -B build -A x64
+        run: cmake -S . -B build -A x64 -DVIVISECT_BUILD_CLAP=OFF "-DFETCHCONTENT_BASE_DIR=$FC_DIR"
 
       - name: Configure (Linux)
         if: runner.os == 'Linux'
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVIVISECT_BUILD_CLAP=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            "-DFETCHCONTENT_BASE_DIR=$FC_DIR"
 
-      - name: Build
-        run: cmake --build build --config Release --parallel 4
+      - name: Build test harness
+        run: cmake --build build --config Release --target VivisectTests --parallel 4
 
       - name: Run test harness (Windows)
         if: runner.os == 'Windows'
@@ -72,39 +127,125 @@ jobs:
         if: runner.os == 'Linux'
         run: ./build/VivisectTests
 
-      - name: Package
+  build:
+    name: build (${{ matrix.name }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
         shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch cache location
+        run: echo "FC_DIR=$(echo "$GITHUB_WORKSPACE" | sed 's#\\#/#g')/.fetchcontent" >> "$GITHUB_ENV"
+
+      - name: Cache FetchContent downloads (JUCE, clap-juce-extensions)
+        uses: actions/cache@v4
+        with:
+          path: .fetchcontent
+          key: fetchcontent-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Force rebuild
+        if: ${{ inputs.rebuild }}
+        run: echo "CCACHE_RECACHE=1" >> "$GITHUB_ENV"
+
+      - name: Compile cache (Linux, macOS)
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: build-${{ matrix.name }}
+
+      - name: Install JUCE build dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
-          VER=$(grep -oP 'project\(Vivisect VERSION \K[0-9.]+' CMakeLists.txt)
+          sudo apt-get update
+          sudo apt-get install -y $LINUX_DEPS
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: command -v ninja || brew install ninja
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        # No -G: CMake picks the newest Visual Studio on the runner image.
+        run: cmake -S . -B build -A x64 -DVIVISECT_BUILD_TESTS=OFF "-DFETCHCONTENT_BASE_DIR=$FC_DIR"
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVIVISECT_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            "-DFETCHCONTENT_BASE_DIR=$FC_DIR"
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        # Both architectures build on the arm64 runner; x86_64 is cross-compiled.
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DVIVISECT_BUILD_TESTS=OFF \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
+            "-DFETCHCONTENT_BASE_DIR=$FC_DIR"
+
+      # Tests are OFF in this configuration, so "all" is only the plug-in targets.
+      - name: Build plug-ins
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Ad-hoc codesign (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ART=build/Vivisect_artefacts/Release
+          for b in VST3/Vivisect.vst3 CLAP/Vivisect.clap AU/Vivisect.component Standalone/Vivisect.app; do
+            codesign --force --deep -s - "$ART/$b"
+            codesign --verify --deep --strict "$ART/$b"
+          done
+
+      - name: Package
+        run: |
+          VER=$(sed -nE 's/^project\(Vivisect VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
           ART=build/Vivisect_artefacts/Release
           OUT="Vivisect-${VER}-${{ matrix.name }}"
           mkdir -p "dist/$OUT"
-          cp -r "$ART/VST3/Vivisect.vst3" "dist/$OUT/"
-          cp -r "$ART/CLAP/Vivisect.clap" "dist/$OUT/"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            cp "$ART/Standalone/Vivisect.exe" "dist/$OUT/"
-          else
-            cp "$ART/Standalone/Vivisect" "dist/$OUT/"
-            cp -r "$ART/LV2/Vivisect.lv2" "dist/$OUT/"
-          fi
+          case "$RUNNER_OS" in
+            Windows)
+              cp -r "$ART/VST3/Vivisect.vst3" "$ART/CLAP/Vivisect.clap" "$ART/Standalone/Vivisect.exe" "dist/$OUT/"
+              ;;
+            Linux)
+              cp -r "$ART/VST3/Vivisect.vst3" "$ART/CLAP/Vivisect.clap" "$ART/LV2/Vivisect.lv2" \
+                    "$ART/Standalone/Vivisect" "dist/$OUT/"
+              ;;
+            macOS)
+              # ditto keeps bundle structure, symlinks and the code signature intact.
+              for b in VST3/Vivisect.vst3 CLAP/Vivisect.clap AU/Vivisect.component Standalone/Vivisect.app; do
+                ditto "$ART/$b" "dist/$OUT/$(basename "$b")"
+              done
+              ;;
+          esac
           cp LICENSE COPYRIGHT-TRADEMARK.md INSTALL.md "dist/$OUT/"
           cd dist
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            7z a -tzip "$OUT.zip" "$OUT" > /dev/null
-          else
-            zip -qr "$OUT.zip" "$OUT"
-          fi
+          case "$RUNNER_OS" in
+            Windows) 7z a -tzip "$OUT.zip" "$OUT" > /dev/null ;;
+            Linux)   zip -qry "$OUT.zip" "$OUT" ;;
+            macOS)   ditto -c -k --keepParent "$OUT" "$OUT.zip" ;;
+          esac
           echo "PKG=dist/$OUT.zip" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
           name: Vivisect-${{ matrix.name }}
           path: ${{ env.PKG }}
+          if-no-files-found: error
 
   # One job publishes every platform's zip, so the matrix jobs never race to
   # create the same release.
   publish:
-    needs: build
+    needs: [tests, build]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
@@ -112,18 +253,24 @@ jobs:
 
       - name: Decide whether to publish
         id: rel
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VER=$(grep -oP 'project\(Vivisect VERSION \K[0-9.]+' CMakeLists.txt)
+          VER=$(sed -nE 's/^project\(Vivisect VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
+          BETA=1
+          if [ -f release-beta.txt ]; then
+            N=$(tr -dc '0-9' < release-beta.txt)
+            if [ -n "$N" ]; then BETA="$N"; fi
+          fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
           else
-            TAG="v$VER"
+            TAG="v${VER}-beta.${BETA}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF" == refs/heads/main ]] && gh release view "$TAG" > /dev/null 2>&1; then
-            echo "Release $TAG already exists; bump the version to publish a new one."
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists, skipping publish. Bump release-beta.txt or the CMake version to publish a new one."
             echo "publish=false" >> "$GITHUB_OUTPUT"
           else
             echo "publish=true" >> "$GITHUB_OUTPUT"
@@ -135,7 +282,7 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Publish GitHub Release
+      - name: Publish GitHub pre-release
         if: steps.rel.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
@@ -143,4 +290,5 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Vivisect ${{ steps.rel.outputs.tag }}
           files: dist/*.zip
+          prerelease: true
           generate_release_notes: true

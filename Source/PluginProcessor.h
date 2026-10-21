@@ -2,10 +2,15 @@
 #include <JuceHeader.h>
 #include <array>
 #include <atomic>
+#include <deque>
 #include <map>
 #include <memory>
+#include <optional>
+#include <vector>
 #include "Parameters.h"
 #include "Dsp.h"
+#include "Effects.h"
+#include "Capture.h"
 
 // ============================================================================
 //  VIVISECT — sample butchery. See README.md.
@@ -46,6 +51,12 @@ public:
     vsx::TelemetryRing telem;
     vsx::Scar scar;
     bool scarWasOn = false;
+    // ==== EFFECTS (E1/E2) ====
+    vsx::Tourniquet tourniquet;
+    bool tourniquetWasOn = false;
+    vsx::Clot clot;
+    bool clotWasOn = false;
+    // ==== END EFFECTS (E1/E2) ====
     vsx::Flatline flatline;
     bool flatlineWasOn = false;
     bool crashLogOn = false;            // never restored from state, by design
@@ -70,7 +81,7 @@ public:
     // the right preset loading even if the folder changed since the menu was
     // built - which the "Open Preset Folder" item actively invites.
     bool loadPresetByName (const juce::String& displayName);
-    static constexpr int numFactoryPresets = 6;
+    static constexpr int numFactoryPresets = 14;   // 6 original vibes + 8 added in 0.10.0
     void saveUserPreset (const juce::String& name);
     juce::File getUserPresetDir() const;
 
@@ -128,11 +139,56 @@ public:
     int  currentABSlot() const { return abSlot; }
     void copyABSlot();                       // current slot -> the other one
 
+    // -- undo / redo (F1) -----------------------------------------------------
+    //  Sound parameters only (the same scope as A/B): never VSX_SETTINGS, locks,
+    //  MIDI maps, samples or presets on disk. Message thread only.
+    //  pushUndoSnapshot() records the CURRENT state as an undo step and clears
+    //  redo; call it just before a change. RANDOM, MUTATE, RESET, preset load,
+    //  A/B swap and history rewind do this themselves (once each); UI gestures
+    //  are coalesced through the parameter listener. Host automation is not
+    //  recorded.
+    static constexpr int kUndoDepth = 100;
+    void pushUndoSnapshot();
+    bool undo();
+    bool redo();
+    bool canUndo() const;
+    bool canRedo() const;
+    void clearUndoHistory();
+    // The editor closed with a gesture still open (no end message will ever arrive):
+    // keep what the drag changed as one step and close the gesture, so the stack
+    // does not stay wedged at "gesture in progress".
+    void commitOpenUndoGesture();
+    int  undoDepth() const;
+    int  redoDepth() const;
+    juce::String undoLabel() const;          // e.g. "Undo: Chaos 0.40 -> 0.12"
+    juce::String redoLabel() const;
+
+    // -- capture and drag-out (F3) --------------------------------------------
+    //  Records the final post-FX output (1/2/4/8 bars). Playing hosts start on
+    //  the next bar line; standalone or stopped starts at once. The take is
+    //  written to <user data>/Captures/ by a background thread.
+    bool startCapture (int bars);
+    void cancelCapture();
+    vsx::CaptureInfo captureState() const { return capture.info(); }
+    juce::Array<juce::File> listCaptures (int maxCount = 0) const { return capture.list (maxCount); }
+    int  captureBars() const;                // user setting (VSX_SETTINGS): 1, 2, 4 or 8
+    void setCaptureBars (int bars);
+    juce::File captureDirectory() const { return capture.directory(); }
+    void setCaptureDirectory (const juce::File& d) { capture.setDirectory (d); }
+    vsx::CaptureEngine& captureEngine() noexcept { return capture; }
+
     // -- options ------------------------------------------------------------
     bool tooltipsEnabled() const;
     void setTooltipsEnabled (bool);
     float uiScale() const;                   // editor zoom; <= 0 if never set
     void  setUiScale (float);
+
+    // ==== MUSICAL (F4) ==== user settings (VSX_SETTINGS), never part of sound state
+    bool simpleViewEnabled() const;
+    void setSimpleViewEnabled (bool);
+    bool firstRunHintDismissed() const;
+    void setFirstRunHintDismissed (bool);
+    // ==== end MUSICAL (F4) ====
 
     // -- MIDI learn ---------------------------------------------------------
     void beginMidiLearn (const juce::String& paramID);
@@ -153,6 +209,20 @@ private:
     static juce::AudioProcessorValueTreeState::ParameterLayout layout() { return vsx::createParameterLayout(); }
 
     float pv (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
+    // ==== EFFECTS (E1/E2) ====
+    // Raw-value/parameter pairs resolved once in the constructor so the audio
+    // thread never builds or hashes a string for the effect stages.
+    struct FxRef
+    {
+        juce::RangedAudioParameter* par = nullptr;
+        std::atomic<float>* raw = nullptr;
+        float get() const noexcept { return raw != nullptr ? raw->load() : 0.f; }
+    };
+    FxRef fxRef (const char* paramID) const;
+    float fxMod (const FxRef&, int destEnum) const noexcept;
+    FxRef fxTqOn, fxTqMode, fxTqCutoff, fxTqRes, fxTqEnv, fxTqMix,
+          fxClotOn, fxClotTime, fxClotFree, fxClotFeedback, fxClotTone, fxClotSpread, fxClotMix;
+    // ==== END EFFECTS (E1/E2) ====
     double bufferRegionSamples (double samplesPerBeat) const;
     float pvMod (const char* id, int destEnum);
     void  applyPresetMap (const std::map<juce::String, float>&);
@@ -209,6 +279,47 @@ private:
     std::array<std::atomic<float>, 128> pendingCCValue;   // < 0 = nothing queued
     std::array<std::atomic<int>, 128>   pendingCCParam;
     int timerTicks = 0;
+
+    // undo / redo
+    struct UndoSnapshot
+    {
+        std::vector<float> norm;          // exact normalised value of every parameter
+        juce::ValueTree    tree;          // sound state, VSX_SETTINGS excluded
+    };
+    struct UndoGestureListener : public juce::AudioProcessorParameter::Listener
+    {
+        explicit UndoGestureListener (VivisectProcessor& o) : owner (o) {}
+        void parameterValueChanged (int, float) override {}
+        void parameterGestureChanged (int, bool starting) override;
+        VivisectProcessor& owner;
+    };
+    struct UndoScope
+    {
+        explicit UndoScope (VivisectProcessor& p) : owner (p)
+        {
+            if (owner.undoScopeDepth++ == 0)
+            {
+                owner.commitOpenUndoGesture();      // a drag still open becomes its own step first
+                owner.pushUndoSnapshot();
+            }
+        }
+        ~UndoScope() { --owner.undoScopeDepth; }
+        VivisectProcessor& owner;
+    };
+    UndoSnapshot captureUndoSnapshot();
+    std::vector<float> currentNormalised() const;
+    void applyUndoSnapshot (const UndoSnapshot&);
+    juce::String describeUndoStep (const UndoSnapshot& target, const char* verb) const;
+    std::deque<UndoSnapshot> undoStack, redoStack;
+    mutable juce::CriticalSection undoLock;
+    UndoGestureListener undoListener { *this };
+    int undoScopeDepth = 0;                // > 0 while an action or an undo is applying
+    int gestureDepth = 0;
+    std::optional<UndoSnapshot> gestureStart;
+
+    // capture
+    vsx::CaptureEngine capture;
+    int chunkSampleOffset = 0;             // position of the current chunk inside an oversized host block
 
     // A/B compare
     juce::ValueTree abState[2];

@@ -284,7 +284,6 @@ ChaosField deriveChaos (float cIn) noexcept
     f.lengthJitter  = juce::jlimit (0.f, 1.f, (c - 0.15f) / 0.85f) * 0.8f;
     f.skipProb      = juce::jlimit (0.f, 0.55f, c - 0.30f);
     f.wrongSlice    = juce::jlimit (0.f, 0.90f, (c - 0.45f) * 1.6f);
-    f.routeSwap     = juce::jlimit (0.f, 0.50f, (c - 0.60f) * 1.2f);
     f.feedback      = juce::jlimit (0.f, 1.f,  (c - 0.55f) * 2.0f);
     f.pitchChaos    = sq;
     f.gridBypass    = juce::jlimit (0.f, 1.f,  (c - 0.70f) * 3.0f);
@@ -406,6 +405,10 @@ public:
         repeatsLeft = (int) ratchet * (1 + (int) std::floor (pp2 * 2.0)) + 1;
         pitch = 1.0; rpos = 0.0; gain = 1.0f; active = true; startOff = c.startOffset;
         drift = (pp3 * 0.05f + c.pitchChaos * 0.04f) * (c.rng->nextFloat() * 2.f - 1.f);
+        scaleChaos = c.pitchChaos;      // ==== MUSICAL (F2) ====
+        // The FIRST repeat must already sit on a scale degree (root/type are set before
+        // trigger), not only the later ones.
+        if (scale.on) pitch = (double) scale.pickRatio (scaleRng.nextFloat(), scaleChaos);
         lastGrabStart.store ((i64) c.sourcePos);
         lastGrabLen.store (sliceLen);
     }
@@ -427,7 +430,10 @@ public:
             {
                 rpos -= repeatLen;
                 --repeatsLeft;
-                pitch *= (1.0 + drift);
+                // ==== MUSICAL (F2) ==== Scale Lock: every repeat lands on a scale degree
+                if (scale.on) pitch = (double) scale.pickRatio (scaleRng.nextFloat(), scaleChaos);
+                else          pitch *= (1.0 + drift);
+                // ==== end MUSICAL (F2) ====
                 gain  *= 0.9f;
             }
         }
@@ -439,6 +445,8 @@ private:
     int sliceLen = 0, repeatsLeft = 0, startOff = 0;
     double rpos = 0, repeatLen = 0, pitch = 1;
     float gain = 1.f, drift = 0.f;
+    float scaleChaos = 0.f;                 // ==== MUSICAL (F2) ====
+    juce::Random scaleRng { 0x5ca1e01 };    // only drawn from while Scale Lock is on
     bool active = false;
 };
 
@@ -456,6 +464,7 @@ public:
         sizeS      = (0.005 + pp1 * 0.195) * sr;
         spawnPer   = sr / (4.0 + pp2 * 76.0);
         sprayCents = pp3 * 2400.f;
+        scaleChaos = c.pitchChaos;      // ==== MUSICAL (F2) ====
         spread     = (0.02 + pp3 * 0.4 + c.chaos * 0.5) * c.samplesPerBeat * 2.0;
         spawnCnt   = c.startOffset;
         act = 1.f;
@@ -480,6 +489,8 @@ public:
                             g.pos  = center + (rng.nextFloat() * 2.f - 1.f) * spread;
                             g.play = 0.0;
                             g.inc  = std::pow (2.0, (rng.nextFloat() * 2.f - 1.f) * sprayCents / 1200.0);
+                            // ==== MUSICAL (F2) ==== per-grain pitch picks a scale degree
+                            if (scale.on) g.inc = (double) scale.pickRatio (scaleRng.nextFloat(), scaleChaos);
                             g.len  = sizeS * (0.6 + 0.8 * rng.nextFloat());
                             const float pan = rng.nextFloat();
                             g.aL = std::sqrt (1.f - pan);
@@ -513,6 +524,8 @@ private:
     SpecimenBuffer* spec = nullptr;
     int srcSel = 0;
     float morph = .5f, sprayCents = 0.f;
+    float scaleChaos = 0.f;                 // ==== MUSICAL (F2) ====
+    juce::Random scaleRng { 0x5ca1e02 };
     int cloudLeft = 0;
     double center = 0, sizeS = 0, spawnPer = 1, spawnCnt = 0, spread = 0;
     juce::Random rng { 0x9e779 };
@@ -538,6 +551,10 @@ public:
             for (int i = 0; i < sliceLen; ++i)
                 slice.setSample (ch, i, readSource (c, ch, c.sourcePos + i));
         play = sliceLen - 1;
+        // ==== MUSICAL (F2) ==== Scale Lock: the reversed pass plays at a scale-degree pitch
+        playStep = 1.0;
+        if (scale.on) playStep = (double) scale.pickRatio (scaleRng.nextFloat(), c.pitchChaos);
+        // ==== end MUSICAL (F2) ====
         active = true;
         tailLeft = (int) (sr * 1.2);
         bloom = pp2;
@@ -568,7 +585,7 @@ public:
                     : 1.f;
                 a[i] = lerpBuf (slice, 0, play, sliceLen) * env;
                 b[i] = lerpBuf (slice, 1, play, sliceLen) * env;
-                play -= 1.0;
+                play -= playStep;
                 if (play < 0.0) active = false;
             }
             else --tailLeft;
@@ -584,6 +601,8 @@ private:
     juce::Reverb reverb;
     int sliceLen = 0, tailLeft = 0, startOff = 0;
     double play = 0;
+    double playStep = 1.0;                  // ==== MUSICAL (F2) ====
+    juce::Random scaleRng { 0x5ca1e03 };
     float bloom = 0.f;
     bool active = false;
 };
@@ -780,6 +799,13 @@ public:
         }
         durLeft = (int) ((0.2 + pp2 * 3.8) * sr);
         blur = pp3;
+        // G2 level tuning: measured against the Hann-weighted RMS of the grab,
+        // the constant 2/3 gain leaves the output +4.3 dB hot at BLUR 0 (every
+        // frame repeats the same windowed slice, so overlaps add coherently)
+        // and level at BLUR 1 (random phase, overlaps add in power). The excess
+        // follows 4.3 dB * cos(blur * pi/2) to within 0.15 dB, for noise, sine and
+        // drum material at 44.1/48/96 kHz, so take it back out here.
+        compGain = std::pow (10.f, -4.3f * std::cos (juce::jlimit (0.f, 1.f, blur) * 1.5707963f) / 20.f);
         std::fill (ola.begin(), ola.end(), 0.f);
         rp = 0; hopCd = H; gain = 1.f; active = true; startOff = c.startOffset;
         synthFrame (0);
@@ -824,7 +850,7 @@ private:
         // COLA compensation. A constant gain is important here: BLUR changes
         // spectral phase, so dividing by tiny per-sample window weights near
         // frame edges can create large spikes.
-        constexpr float overlapGain = 2.0f / 3.0f;
+        const float overlapGain = (2.0f / 3.0f) * compGain;
         for (int i = 0; i < N; ++i)
         {
             const auto idx = (size_t) ((at + i) % RING);
@@ -835,7 +861,7 @@ private:
     juce::dsp::WindowingFunction<float> window { (size_t) N, juce::dsp::WindowingFunction<float>::hann };
     std::vector<float> mag, runPhase, freq, tmp, ola, winTab;
     int rp = 0, hopCd = 0, durLeft = 0, startOff = 0;
-    float blur = 0.f, gain = 0.f;
+    float blur = 0.f, gain = 0.f, compGain = 1.f;
     bool active = false;
     juce::Random rng { 0x3fee1 };
 };
@@ -878,6 +904,7 @@ void SurgeonRack::reset()
 void SurgeonRack::process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOut, int n,
                            const std::array<float, kNumSurgeons>& mix,
                            const std::array<int,   kNumSurgeons>& routeIn,
+                           const std::array<float, kNumSurgeons>& routeAmt,
                            float reinjectAmt) noexcept
 {
     wetOut.clear();
@@ -897,10 +924,15 @@ void SurgeonRack::process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOu
     for (int d = 0; d < kNumSurgeons; ++d)
     {
         const int src = routeIn[(size_t) d] - 1;
-        if (src >= 0 && src < kNumSurgeons)
+        // Route In picks the source, Route Amt (G1) its level. Amt 0 adds
+        // nothing, so it is exactly "no routing". Any cycle stays bounded
+        // because the sum is written back through SpecimenBuffer::reinject,
+        // which tanh-limits the specimen on every pass.
+        const float amt = juce::jlimit (0.f, 1.f, routeAmt[(size_t) d]);
+        if (src >= 0 && src < kNumSurgeons && amt > 0.f)
         {
-            feedBuf.addFrom (0, 0, outs[(size_t) src], 0, 0, n, 0.5f);
-            feedBuf.addFrom (1, 0, outs[(size_t) src], 1, 0, n, 0.5f);
+            feedBuf.addFrom (0, 0, outs[(size_t) src], 0, 0, n, amt);
+            feedBuf.addFrom (1, 0, outs[(size_t) src], 1, 0, n, amt);
         }
     }
     const bool anyFeed = feedBuf.getMagnitude (0, 0, n) > 1.0e-5f;

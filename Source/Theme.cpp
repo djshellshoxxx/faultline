@@ -104,6 +104,7 @@ juce::File userDataDir()
 juce::File userPresetDir()      { return userDataDir().getChildFile ("Presets"); }
 juce::File userLogDir()         { return userDataDir().getChildFile ("Logs"); }
 juce::File userCacheDir()       { return userDataDir().getChildFile ("Cache"); }
+juce::File userCapturesDir()    { return userDataDir().getChildFile ("Captures"); }
 juce::String userPresetDirPath() { return userPresetDir().getFullPathName(); }
 
 void openHomePage() { juce::URL (product::home).launchInDefaultBrowser(); }

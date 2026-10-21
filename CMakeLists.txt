@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
-project(Vivisect VERSION 0.9.3 LANGUAGES C CXX)
+
+# macOS: must be set before project(). 11.0 is the first release with arm64
+# and still runs on Intel Macs. Override with -DCMAKE_OSX_DEPLOYMENT_TARGET=...
+if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+endif()
+
+project(Vivisect VERSION 0.10.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,18 +30,20 @@ endif()
 
 # ---------------------------------------------------------------------------
 #  Formats. VST3 and Standalone everywhere; LV2 additionally on Linux, where
-#  it is the format most hosts (Ardour, Qtractor, Zrythm) reach for first.
+#  it is the format most hosts (Ardour, Qtractor, Zrythm) reach for first;
+#  AU additionally on macOS.
 #  CLAP is added separately below, because JUCE has no native CLAP wrapper.
 # ---------------------------------------------------------------------------
 if(UNIX AND NOT APPLE)
     set(VIVISECT_FORMATS VST3 LV2 Standalone CACHE STRING "Plugin formats to build")
+elseif(APPLE)
+    set(VIVISECT_FORMATS VST3 AU Standalone CACHE STRING "Plugin formats to build")
 else()
     set(VIVISECT_FORMATS VST3 Standalone CACHE STRING "Plugin formats to build")
 endif()
 
 juce_add_plugin(Vivisect
     COMPANY_NAME "Specimen Audio"
-    BUNDLE_ID com.specimenaudio.vivisect
     PLUGIN_MANUFACTURER_CODE Spcm
     PLUGIN_CODE Vvsc
     IS_SYNTH FALSE
@@ -47,6 +56,9 @@ juce_add_plugin(Vivisect
     ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Assets/icon.png"
     ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/Assets/icon_small.png"
     VST3_CATEGORIES "Fx" "Distortion"
+    AU_MAIN_TYPE kAudioUnitType_Effect
+    AU_EXPORT_PREFIX VivisectAU
+    BUNDLE_ID com.specimenaudio.vivisect
     LV2URI "https://specimenaudio.com/plugins/vivisect")
 
 target_sources(Vivisect PRIVATE
@@ -54,7 +66,10 @@ target_sources(Vivisect PRIVATE
     Source/PluginEditor.cpp
     Source/Dsp.cpp
     Source/Theme.cpp
-    Source/Ui.cpp)
+    Source/Ui.cpp
+    Source/PanelsEffects.cpp
+    Source/PanelsCapture.cpp
+    Source/PanelsMusical.cpp)
 
 target_include_directories(Vivisect PRIVATE Source)
 

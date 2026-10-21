@@ -5,6 +5,11 @@
 #include <vector>
 #include "PluginProcessor.h"
 #include "Ui.h"
+#include "PanelsEffects.h"   // ==== EFFECTS PANEL hook ====
+// ==== UNDO/CAPTURE hook ====
+#include "PanelsCapture.h"
+// ==== end UNDO/CAPTURE hook ====
+#include "PanelsMusical.h"   // ==== MUSICAL/DOSE hook ====
 
 // The whole UI, laid out at a fixed design size. VivisectEditor below scales
 // it as one piece, which is how JUCE wants a zoomable editor built: the host
@@ -12,6 +17,9 @@
 class VivisectView : public juce::Component,
                        public vsx::ParamHost,
                        public juce::FileDragAndDropTarget,
+                       // ==== UNDO/CAPTURE hook ==== (drag-out of captured takes)
+                       public juce::DragAndDropContainer,
+                       // ==== end UNDO/CAPTURE hook ====
                        private juce::Timer
 {
 public:
@@ -24,6 +32,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    // ==== UNDO/CAPTURE hook ==== Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y
+    bool keyPressed (const juce::KeyPress&) override;
+    // ==== end UNDO/CAPTURE hook ====
 
     // Drag and drop — any audio file dropped on the editor loads into a slot.
     bool isInterestedInFileDrag (const juce::StringArray&) override;
@@ -65,6 +76,23 @@ private:
     void showOverlay (juce::Component* which);
     void showAudioMidiSettings();
 
+    // ==== MUSICAL/DOSE hook ====
+    // Simple view: pure visibility. Nothing is reset and no parameter changes.
+    void applySimpleView (bool simple);
+    // Layout: one function per view so neither leaves holes (see resized()).
+    void layoutFull (juce::Rectangle<int> body);
+    void layoutSimple (juce::Rectangle<int> body);
+    struct SectionHeader { juce::String text, hint; juce::Rectangle<int> area; };
+    std::vector<SectionHeader> headers;
+    vsx::VsxButton scaleToggle { "SCALE", this, vsx::id::scaleOn };   // Simple view's compact Scale Lock ON
+    std::unique_ptr<BA> scaleToggleA;
+    std::unique_ptr<vsx::ScaleLockPanel>   scalePanel;
+    std::unique_ptr<vsx::DosePanel>        dosePanel;
+    std::unique_ptr<vsx::SimpleViewButton> simpleBtn;
+    std::unique_ptr<vsx::FirstRunHint>     hintStrip;
+    bool simpleView = false;
+    // ==== end MUSICAL/DOSE hook ====
+
     VivisectProcessor& proc;
     vsx::VsxLookAndFeel lnf;
     vsx::VsxTooltipWindow tips { this };
@@ -96,6 +124,11 @@ private:
     vsx::VsxButton  aBtn { "A" }, bBtn { "B" }, copyBtn { "COPY" };
     vsx::GearButton gearBtn;
 
+    // ==== UNDO/CAPTURE hook ====
+    vsx::VsxButton undoBtn { "UNDO" }, redoBtn { "REDO" };
+    vsx::CapturePanel capturePanel { proc };
+    // ==== end UNDO/CAPTURE hook ====
+
     // action buttons
     vsx::VsxButton randomBtn { "RANDOM" }, mutateBtn { "MUTATE" }, resetBtn { "RESET" }, saveBtn { "FREEZE / SAVE" };
 
@@ -104,6 +137,7 @@ private:
     vsx::OptionsPanel options;
     vsx::DebugPanel   debug;
     vsx::SecretPanel  secret { *this };
+    vsx::EffectsPanel effectsPanel { *this };   // ==== EFFECTS PANEL hook ====
 
     // positioned individually in resized()
     vsx::VsxSlider *kChaos = nullptr, *kPull = nullptr, *kSwing = nullptr, *kDryWet = nullptr,
