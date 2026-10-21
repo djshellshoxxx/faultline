@@ -324,6 +324,20 @@ VivisectView::VivisectView (VivisectProcessor& p)
     debug.setCrashLogState (proc.isCrashLogEnabled(),
                             proc.currentCrashLogFile().getFullPathName());
 
+    // ==== MUSICAL/DOSE hook ====
+    scalePanel = std::make_unique<ScaleLockPanel> (*this);
+    dosePanel  = std::make_unique<DosePanel> (*this);
+    simpleBtn  = std::make_unique<SimpleViewButton>();
+    hintStrip  = std::make_unique<FirstRunHint>();
+    addAndMakeVisible (*scalePanel);
+    addAndMakeVisible (*dosePanel);
+    addAndMakeVisible (*simpleBtn);
+    addChildComponent (*hintStrip);
+    simpleBtn->onChanged = [this] (bool on) { proc.setSimpleViewEnabled (on); applySimpleView (on); };
+    hintStrip->onDismiss = [this] { proc.setFirstRunHintDismissed (true); hintStrip->setVisible (false); };
+    hintStrip->setVisible (! proc.firstRunHintDismissed());
+    // ==== end MUSICAL/DOSE hook ====
+
     // -- the hidden effect ---------------------------------------------------
     addChildComponent (secret);
     secret.onClose   = [this] { secret.reveal (false); };
@@ -343,6 +357,8 @@ VivisectView::VivisectView (VivisectProcessor& p)
 
     tips.setTipsEnabled (proc.tooltipsEnabled());
 
+    applySimpleView (proc.simpleViewEnabled());     // MUSICAL/DOSE hook
+
     setSize (kW, kH);
     startTimerHz (8);
 }
@@ -357,8 +373,38 @@ void VivisectView::beginMidiLearnFor (const juce::String& paramID)
     repaint();
 }
 
+// ==== MUSICAL/DOSE hook ====
+void VivisectView::applySimpleView (bool simple)
+{
+    simpleView = simple;
+    simpleBtn->setSimple (simple);
+
+    // The one place that lists what Simple view hides. Other panels (effects,
+    // capture shelf, ...) add their component pointers here. Null is skipped.
+    const juce::Array<juce::Component*> hidden {
+        // mod matrix
+        kL1r, kL2r, kMac1, kMac2, cL1s, cL2s, &stream,
+        mmSrc[0], mmSrc[1], mmSrc[2], mmSrc[3], mmDst[0], mmDst[1], mmDst[2], mmDst[3],
+        mmDepth[0], mmDepth[1], mmDepth[2], mmDepth[3],
+        // sidechain
+        cScMode, kScAmt,
+        // musical detail
+        scalePanel.get()
+        // effects panels: add pointers above this line
+    };
+    for (auto* c : hidden)
+        if (c != nullptr) c->setVisible (! simple);
+    for (auto* st : strips) st->setRouteVisible (! simple);      // routing
+    resized();      // re-evaluates the data stream's own fit test
+    repaint();
+}
+// ==== end MUSICAL/DOSE hook ====
+
 void VivisectView::timerCallback()
 {
+    // ==== MUSICAL/DOSE hook ==== follow a session restored while the editor is open
+    if (proc.simpleViewEnabled() != simpleView) applySimpleView (proc.simpleViewEnabled());
+    // ==== end MUSICAL/DOSE hook ====
 
     // the audio thread clears the learn target as soon as it sees a CC
     const auto t = proc.midiLearnTarget();
@@ -645,6 +691,7 @@ void VivisectView::paint (juce::Graphics& g)
     // -- combo captions ------------------------------------------------------
     for (auto& c : captions)
     {
+        if (! c.first->isVisible()) continue;      // MUSICAL/DOSE hook: hidden by Simple view
         auto b = c.first->getBounds();
         draw::label (g, c.second, { b.getX() - 6, b.getY() - 13, b.getWidth() + 12, 12 },
                      juce::Justification::centredLeft, col::textMuted, 10.f);
@@ -656,7 +703,7 @@ void VivisectView::paint (juce::Graphics& g)
         const int y = strips[0]->getY() - 14;
         draw::sectionHeader (g, "SURGEONS", { kPad, y, 240, 12 });
     }
-    if (mmSrc[0] != nullptr)
+    if (mmSrc[0] != nullptr && ! simpleView)       // MUSICAL/DOSE hook
     {
         const int y = kL1r->getY() - 14;
         draw::sectionHeader (g, "MODULATION", { kPad, y, 240, 12 });
@@ -721,10 +768,18 @@ void VivisectView::resized()
     presetBox.setBounds (right.removeFromRight (208).withSizeKeepingCentre (208, 24));
     right.removeFromRight (kG / 2);
     menuBtn.setBounds (right.removeFromRight (72).withSizeKeepingCentre (72, 24));
+    // ==== MUSICAL/DOSE hook ====
+    right.removeFromRight (kG / 2);
+    simpleBtn->setBounds (right.removeFromRight (72).withSizeKeepingCentre (72, 24));
+    // ==== end MUSICAL/DOSE hook ====
 
     // -- monitor -------------------------------------------------------------
     r.removeFromTop (kG);
     monitor.setBounds (r.removeFromTop (kMonitorH).reduced (kPad, 0));
+    // ==== MUSICAL/DOSE hook ==== hint strip rides on the monitor's lower edge
+    hintStrip->setBounds (monitor.getBounds().removeFromBottom (28).reduced (kG, 3));
+    hintStrip->toFront (false);
+    // ==== end MUSICAL/DOSE hook ====
 
     // -- master row ----------------------------------------------------------
     r.removeFromTop (kG);
@@ -765,8 +820,17 @@ void VivisectView::resized()
         io.removeFromLeft (kG / 2);
     }
     io.removeFromLeft (kPad);
-    meter.setBounds (io.removeFromLeft (juce::jmin (320, io.getWidth()))
-                       .withSizeKeepingCentre (juce::jmin (320, io.getWidth()), 48));
+    // ==== MUSICAL/DOSE hook ==== DOSE + Scale Lock take the right end of the I/O row
+    {
+        const int musicalW = 88 + kG + ScaleLockPanel::preferredWidth;
+        const int meterW = juce::jmax (120, juce::jmin (320, io.getWidth() - musicalW - kPad));
+        meter.setBounds (io.removeFromLeft (meterW).withSizeKeepingCentre (meterW, 48));
+        io.removeFromLeft (kPad);
+        dosePanel->setBounds (io.removeFromLeft (88));
+        io.removeFromLeft (kG);
+        scalePanel->setBounds (io.removeFromLeft (ScaleLockPanel::preferredWidth));
+    }
+    // ==== end MUSICAL/DOSE hook ====
 
     // -- surgeons ------------------------------------------------------------
     r.removeFromTop (kG);
@@ -832,7 +896,7 @@ void VivisectView::resized()
         const int w = getWidth() - kPad - x;
         const int hgt = modBottom - modHeadTop;
         const bool worthIt = w >= 220 && hgt >= 60;
-        stream.setVisible (worthIt);
+        stream.setVisible (worthIt && ! simpleView);       // MUSICAL/DOSE hook
         if (worthIt)
             stream.setBounds (x, modHeadTop, w, hgt);
     }

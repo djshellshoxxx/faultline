@@ -5,6 +5,7 @@
 #include <vector>
 #include "PluginProcessor.h"
 #include "Ui.h"
+#include "PanelsMusical.h"   // ==== MUSICAL/DOSE hook ====
 
 // The whole UI, laid out at a fixed design size. VivisectEditor below scales
 // it as one piece, which is how JUCE wants a zoomable editor built: the host
@@ -64,6 +65,16 @@ private:
     void doExportSpecimen (int bitDepth);
     void showOverlay (juce::Component* which);
     void showAudioMidiSettings();
+
+    // ==== MUSICAL/DOSE hook ====
+    // Simple view: pure visibility. Nothing is reset and no parameter changes.
+    void applySimpleView (bool simple);
+    std::unique_ptr<vsx::ScaleLockPanel>   scalePanel;
+    std::unique_ptr<vsx::DosePanel>        dosePanel;
+    std::unique_ptr<vsx::SimpleViewButton> simpleBtn;
+    std::unique_ptr<vsx::FirstRunHint>     hintStrip;
+    bool simpleView = false;
+    // ==== end MUSICAL/DOSE hook ====
 
     VivisectProcessor& proc;
     vsx::VsxLookAndFeel lnf;

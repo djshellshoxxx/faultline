@@ -205,6 +205,9 @@ public:
     SurgeonStrip (ParamHost&, int surgeonIndex, std::function<float()> activity);
     void resized() override;
     void paint (juce::Graphics&) override;
+    // ==== MUSICAL (F4) ==== Simple view hides the routing combo only
+    void setRouteVisible (bool v) { route.setVisible (v); }
+    // ==== end MUSICAL (F4) ====
 private:
     void timerCallback() override;
     using SA = juce::AudioProcessorValueTreeState::SliderAttachment;
