@@ -342,6 +342,12 @@ longer crashes if it opens before audio starts; and the window is resizable
 test harness.
 
 
+## Verification and wiki
+
+This documentation pass did not build the plugin, which needs the JUCE fetch and X11 or Windows toolchains that the sandbox lacked. The QA record for the 0.10.0 beta, written by the project, is in [docs/QA-0.10.0.md](docs/QA-0.10.0.md). It lists the harness, sanitizer, pluginval and clap-validator runs and what was not covered. Those results were not reproduced here.
+
+Wiki pages are in [`docs/wiki/`](docs/wiki/Home.md).
+
 ## Plain-language overview
 
 New to the project? Start with the [ELI5 guide](ELI5.md).
