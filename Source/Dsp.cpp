@@ -780,6 +780,13 @@ public:
         }
         durLeft = (int) ((0.2 + pp2 * 3.8) * sr);
         blur = pp3;
+        // G2 level tuning: measured against the Hann-weighted RMS of the grab,
+        // the constant 2/3 gain leaves the output +4.3 dB hot at BLUR 0 (every
+        // frame repeats the same windowed slice, so overlaps add coherently)
+        // and level at BLUR 1 (random phase, overlaps add in power). The excess
+        // follows 4.3 dB * cos(blur * pi/2) to within 0.15 dB, for noise, sine and
+        // drum material at 44.1/48/96 kHz, so take it back out here.
+        compGain = std::pow (10.f, -4.3f * std::cos (juce::jlimit (0.f, 1.f, blur) * 1.5707963f) / 20.f);
         std::fill (ola.begin(), ola.end(), 0.f);
         rp = 0; hopCd = H; gain = 1.f; active = true; startOff = c.startOffset;
         synthFrame (0);
@@ -824,7 +831,7 @@ private:
         // COLA compensation. A constant gain is important here: BLUR changes
         // spectral phase, so dividing by tiny per-sample window weights near
         // frame edges can create large spikes.
-        constexpr float overlapGain = 2.0f / 3.0f;
+        const float overlapGain = (2.0f / 3.0f) * compGain;
         for (int i = 0; i < N; ++i)
         {
             const auto idx = (size_t) ((at + i) % RING);
@@ -835,7 +842,7 @@ private:
     juce::dsp::WindowingFunction<float> window { (size_t) N, juce::dsp::WindowingFunction<float>::hann };
     std::vector<float> mag, runPhase, freq, tmp, ola, winTab;
     int rp = 0, hopCd = 0, durLeft = 0, startOff = 0;
-    float blur = 0.f, gain = 0.f;
+    float blur = 0.f, gain = 0.f, compGain = 1.f;
     bool active = false;
     juce::Random rng { 0x3fee1 };
 };
