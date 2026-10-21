@@ -176,6 +176,10 @@ std::map<String, float> snapshotParams (VivisectProcessor& p)
 #include "TestsLayout.inc"
 #define VSX_HAVE_LAYOUT_TESTS 1
 #endif
+#if __has_include("TestsTempoKey.inc")
+#include "TestsTempoKey.inc"
+#define VSX_HAVE_TEMPOKEY_TESTS 1
+#endif
 #if __has_include("TestsAudit.inc") && defined (VSX_HAVE_UNDO_CAPTURE_TESTS)
 #include "TestsAudit.inc"
 #define VSX_HAVE_AUDIT_TESTS 1
@@ -1593,6 +1597,9 @@ int main()
 #endif
 #ifdef VSX_HAVE_ROUTING_TESTS
     run_routing_tests (kRate, kBlock);
+#endif
+#ifdef VSX_HAVE_TEMPOKEY_TESTS
+    run_tempokey_tests (kRate, kBlock);
 #endif
 #ifdef VSX_HAVE_AUDIT_TESTS
     run_audit_tests (kRate, kBlock);

@@ -29,12 +29,29 @@ private:
     using BA = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
 
+public:
+    VsxButton   detectBtn { "DETECT" };       // H2: listens to the specimen and sets root + type
+    std::function<void()> onDetect;
+private:
     VsxButton   onBtn;
     VsxComboBox root, type;
     VsxSlider   range;
     std::unique_ptr<BA> onA;
     std::unique_ptr<CA> rootA, typeA;
     std::unique_ptr<SA> rangeA;
+};
+
+// ---------------------------------------------------------------------------
+//  H1: header tempo readout. Click = tap tempo; right-click = double / half / clear.
+class TempoButton : public VsxButton
+{
+public:
+    TempoButton();
+    void mouseDown (const juce::MouseEvent&) override;
+    void setTempo (double bpm, bool fromHost);
+    std::function<void()> onTap;
+    std::function<void (int)> onMenu;          // 1 = double, 2 = half, 3 = clear tapped tempo
+    static juce::String labelFor (double bpm, bool fromHost);
 };
 
 // ---------------------------------------------------------------------------

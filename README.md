@@ -199,6 +199,18 @@ the pitch comes from the scale, so STUTTER DRIFT and the pitch side of GRANULAR
 SPRAY (and their mod destinations) have no effect on pitch. Off behaves exactly
 like 0.9.3.
 
+## Tap tempo and Detect key
+
+The header tempo button shows the tempo in use (`HOST 128.0` when the host sends
+one, `TAP 93.5` otherwise). Click it in time to tap a tempo, right-click for
+double / half / clear. The host tempo always wins; a tapped tempo is a user
+setting that only matters in the standalone app or in hosts without a tempo.
+
+**DETECT** (next to SCALE LOCK) copies the last ~1.4 s of the specimen, finds the
+key with a chromagram and Krumhansl-Schmuckler matching, sets Root and Scale
+(Major or Minor) and switches Scale Lock on. It is one undo step and skips
+locked controls. See [SPECS-0.11.0.md](SPECS-0.11.0.md).
+
 ## Capture and drag-out
 
 CAPTURE records the final output (after every effect) for 1, 2, 4 or 8 bars.
@@ -317,6 +329,7 @@ Build order from the brief. Everything on it is done for the 0.10.0 beta:
 10. UI polish + marketing: **done** for the beta
 11. 0.10.0: TOURNIQUET, CLOT, Undo / Redo, Scale Lock, Capture, DOSE + Simple
     view, Route Amt, macOS builds incl. AU: **done**
+12. 0.11.0: tap tempo, Detect key: **done**
 
 `include.md` asks for MIDI import/export. Vivisect is an effect, not a
 sequencer or instrument, so that item is intentionally N/A. The "special

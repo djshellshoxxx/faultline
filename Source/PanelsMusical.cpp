@@ -30,13 +30,22 @@ ScaleLockPanel::ScaleLockPanel (ParamHost& host)
     addAndMakeVisible (range);
     rangeA = std::make_unique<SA> (host.params(), id::scaleRange, range);
 
+    detectBtn.setTooltip ("Listen to the specimen for about a second and set Scale Root and Scale Type "
+                          "to the key it finds (major or minor), and turn Scale Lock on. One undo step; "
+                          "locked controls are left alone. Play something tonal first.");
+    detectBtn.onClick = [this] { if (onDetect) onDetect(); };
+    addAndMakeVisible (detectBtn);
+
     setSize (preferredWidth, preferredHeight);
 }
 
 void ScaleLockPanel::resized()
 {
     auto r = getLocalBounds();
-    onBtn.setBounds (r.removeFromLeft (96).withSizeKeepingCentre (96, metric::buttonH + 4));
+    auto left = r.removeFromLeft (96).withSizeKeepingCentre (96, metric::buttonH + 4 + metric::gridFine + metric::buttonH - 4);
+    onBtn.setBounds (left.removeFromTop (metric::buttonH + 4));
+    left.removeFromTop (metric::gridFine);
+    detectBtn.setBounds (left);
     r.removeFromLeft (metric::grid);
     range.setBounds (r.removeFromRight (64));
     r.removeFromRight (metric::grid);
@@ -55,6 +64,38 @@ void ScaleLockPanel::paint (juce::Graphics& g)
                  juce::Justification::centredLeft, col::textMuted, 10.f);
     draw::label (g, "SCALE", { type.getX() - 2, type.getY() - 13, type.getWidth() + 4, 12 },
                  juce::Justification::centredLeft, col::textMuted, 10.f);
+}
+
+// ===========================================================================
+TempoButton::TempoButton() : VsxButton ("TAP")
+{
+    setTooltip ("Tempo. Click to tap a tempo; it is used when the host sends none (standalone). "
+                "The host's own tempo always wins. Right-click for double, half or clear.");
+    onClick = [this] { if (onTap) onTap(); };
+}
+
+juce::String TempoButton::labelFor (double bpm, bool fromHost)
+{
+    return juce::String (fromHost ? "HOST " : "TAP ") + juce::String (bpm, 1);
+}
+
+void TempoButton::setTempo (double bpm, bool fromHost)
+{
+    const auto t = labelFor (bpm, fromHost);
+    if (getButtonText() != t) setButtonText (t);
+}
+
+void TempoButton::mouseDown (const juce::MouseEvent& e)
+{
+    if (! e.mods.isPopupMenu()) { VsxButton::mouseDown (e); return; }
+    juce::PopupMenu m;
+    m.addItem (1, "Double tempo (x2)");
+    m.addItem (2, "Half tempo (/2)");
+    m.addSeparator();
+    m.addItem (3, "Clear tapped tempo");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                     [safe = juce::Component::SafePointer<TempoButton> (this)] (int r)
+                     { if (safe != nullptr && r > 0 && safe->onMenu) safe->onMenu (r); });
 }
 
 // ===========================================================================

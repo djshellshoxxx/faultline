@@ -393,6 +393,16 @@ VivisectView::VivisectView (VivisectProcessor& p)
     scaleToggle.setTooltip ("Scale Lock on / off. The root, scale and range live in the full view.");
     addChildComponent (scaleToggle);
     scaleToggleA = std::make_unique<BA> (proc.apvts, id::scaleOn, scaleToggle);
+    addAndMakeVisible (tempoBtn);                                    // H1
+    tempoBtn.setTempo (proc.currentBpm(), proc.hostHasTempo());
+    tempoBtn.onTap  = [this] { proc.tapTempo(); };
+    tempoBtn.onMenu = [this] (int item)
+    {
+        if (item == 3) { proc.setTempoFallback (0.0); return; }
+        const double base = proc.currentBpm();
+        proc.setTempoFallback (juce::jlimit (vsx::kMinBpm, vsx::kMaxBpm, item == 1 ? base * 2.0 : base * 0.5));
+    };
+    scalePanel->onDetect = [this] { proc.requestKeyDetect(); scalePanel->detectBtn.setButtonText ("LISTENING..."); };
     simpleBtn->onChanged = [this] (bool on) { proc.setSimpleViewEnabled (on); applySimpleView (on); };
     hintStrip->onDismiss = [this] { proc.setFirstRunHintDismissed (true); hintStrip->setVisible (false); };
     hintStrip->setVisible (! proc.firstRunHintDismissed());
@@ -473,6 +483,18 @@ void VivisectView::timerCallback()
     // ==== MUSICAL/DOSE hook ==== follow a session restored while the editor is open
     if (proc.simpleViewEnabled() != simpleView) applySimpleView (proc.simpleViewEnabled());
     // ==== end MUSICAL/DOSE hook ====
+    // ==== TEMPO / KEY hook ====
+    tempoBtn.setTempo (proc.currentBpm(), proc.hostHasTempo());
+    if (proc.pollKeyDetect())
+    {
+        const auto k = proc.lastKeyResult();
+        static const char* names[12] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        scalePanel->detectBtn.setButtonText (k.valid ? juce::String (names[k.root]) + (k.minor ? " MINOR" : " MAJOR")
+                                                     : "NO KEY");
+    }
+    else if (! proc.keyDetectPending() && scalePanel->detectBtn.getButtonText() == "LISTENING...")
+        scalePanel->detectBtn.setButtonText ("DETECT");
+    // ==== end TEMPO / KEY hook ====
 
     // the audio thread clears the learn target as soon as it sees a CC
     const auto t = proc.midiLearnTarget();
@@ -869,6 +891,8 @@ void VivisectView::resized()
     right.removeFromRight (kG / 2);
     simpleBtn->setBounds (right.removeFromRight (72).withSizeKeepingCentre (72, 24));
     // ==== end MUSICAL/DOSE hook ====
+    right.removeFromRight (kG / 2);
+    tempoBtn.setBounds (right.removeFromRight (104).withSizeKeepingCentre (104, 24));   // H1
 
     // -- body: one function per view ----------------------------------------
     const juce::Rectangle<int> body (kPad, kBodyTop, getWidth() - 2 * kPad, kBodyH);

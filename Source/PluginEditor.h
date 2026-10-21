@@ -89,6 +89,7 @@ private:
     std::unique_ptr<vsx::ScaleLockPanel>   scalePanel;
     std::unique_ptr<vsx::DosePanel>        dosePanel;
     std::unique_ptr<vsx::SimpleViewButton> simpleBtn;
+    vsx::TempoButton                       tempoBtn;           // H1
     std::unique_ptr<vsx::FirstRunHint>     hintStrip;
     bool simpleView = false;
     // ==== end MUSICAL/DOSE hook ====
