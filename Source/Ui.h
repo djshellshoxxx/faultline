@@ -217,6 +217,9 @@ private:
     VsxToggle onBtn;
     std::unique_ptr<VsxSlider> mix, prob, k1, k2, k3;
     VsxComboBox route;
+    // ==== ROUTING (G1) ====
+    std::unique_ptr<VsxSlider> routeAmt;
+    // ==== END ROUTING (G1) ====
     std::unique_ptr<BA> onA;
     std::unique_ptr<CA> routeA;
     juce::OwnedArray<SA> knobA;

@@ -275,6 +275,7 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     std::array<bool,  kNumSurgeons> on {};
     std::array<float, kNumSurgeons> mixA {}, probA {}, p1A {};
     std::array<int,   kNumSurgeons> routeA {};
+    std::array<float, kNumSurgeons> routeAmtA {};   // G1
     for (int s = 0; s < kNumSurgeons; ++s)
     {
         on[(size_t) s]     = pv (sidRaw (s, SP_ON)) > 0.5f;
@@ -282,6 +283,7 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
         probA[(size_t) s]  = pv (sidRaw (s, SP_PROB));
         p1A[(size_t) s]    = pv (sidRaw (s, SP_P1));
         routeA[(size_t) s] = (int) pv (sidRaw (s, SP_ROUTE));
+        routeAmtA[(size_t) s] = pv (routeAmtRaw (s));   // G1
 
         float q1 = p1A[(size_t) s];
         float q2 = pv (sidRaw (s, SP_P2));
@@ -368,7 +370,7 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
 
     // ---- run surgeons + reinject ---------------------------------
     if (wetBuf.getNumSamples() < n) wetBuf.setSize (2, n, false, false, true);
-    rack.process (specimen, wetBuf, n, mixA, routeA, reinject);
+    rack.process (specimen, wetBuf, n, mixA, routeA, routeAmtA, reinject);
     float maxAct = panic ? 1.f : rack.maxActivity();
 
     // ---- mix ----------------------------------------------------
@@ -1372,6 +1374,7 @@ void VivisectProcessor::randomizeAll()
         setNorm   (sid (s, "p2"),   rr (0.f, 1.f));
         setNorm   (sid (s, "p3"),   rr (0.f, 1.f));
         setChoice (sid (s, "route"), rng.nextFloat() < 0.18f ? 1 + rng.nextInt (kNumSurgeons) : 0);
+        setNorm   (sid (s, "routeAmt"), rr (0.2f, 0.8f));   // G1
     }
     if (! anyOn && ! eligibleOn.isEmpty())
         setNorm (sid (eligibleOn[rng.nextInt (eligibleOn.size())], "on"), 1.f);
@@ -1460,6 +1463,7 @@ void VivisectProcessor::mutateCurrent()
         mutateContinuous (sid (s, "p2"));
         mutateContinuous (sid (s, "p3"));
         mutateChoice (sid (s, "route"));
+        mutateContinuous (sid (s, "routeAmt"));   // G1
     }
 
     if (! anyOn && ! eligibleOn.isEmpty())

@@ -878,6 +878,7 @@ void SurgeonRack::reset()
 void SurgeonRack::process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOut, int n,
                            const std::array<float, kNumSurgeons>& mix,
                            const std::array<int,   kNumSurgeons>& routeIn,
+                           const std::array<float, kNumSurgeons>& routeAmt,
                            float reinjectAmt) noexcept
 {
     wetOut.clear();
@@ -897,10 +898,15 @@ void SurgeonRack::process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOu
     for (int d = 0; d < kNumSurgeons; ++d)
     {
         const int src = routeIn[(size_t) d] - 1;
-        if (src >= 0 && src < kNumSurgeons)
+        // Route In picks the source, Route Amt (G1) its level. Amt 0 adds
+        // nothing, so it is exactly "no routing". Any cycle stays bounded
+        // because the sum is written back through SpecimenBuffer::reinject,
+        // which tanh-limits the specimen on every pass.
+        const float amt = juce::jlimit (0.f, 1.f, routeAmt[(size_t) d]);
+        if (src >= 0 && src < kNumSurgeons && amt > 0.f)
         {
-            feedBuf.addFrom (0, 0, outs[(size_t) src], 0, 0, n, 0.5f);
-            feedBuf.addFrom (1, 0, outs[(size_t) src], 1, 0, n, 0.5f);
+            feedBuf.addFrom (0, 0, outs[(size_t) src], 0, 0, n, amt);
+            feedBuf.addFrom (1, 0, outs[(size_t) src], 1, 0, n, amt);
         }
     }
     const bool anyFeed = feedBuf.getMagnitude (0, 0, n) > 1.0e-5f;

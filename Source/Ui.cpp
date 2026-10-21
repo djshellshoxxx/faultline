@@ -888,6 +888,12 @@ SurgeonStrip::SurgeonStrip (ParamHost& hostRef, int surgeonIndex, std::function<
     addAndMakeVisible (route);
     routeA = std::make_unique<CA> (hostRef.params(), sid (idx, "route"), route);
 
+    // ==== ROUTING (G1) ====
+    routeAmt = make ("routeAmt", "AMT",
+                     "How much of the Route In source reaches this surgeon. 0 = no routing, "
+                     "50% = the classic level. Feedback loops stay bounded.");
+    // ==== END ROUTING (G1) ====
+
     startTimerHz (24);
 }
 void SurgeonStrip::timerCallback()
@@ -911,8 +917,12 @@ void SurgeonStrip::resized()
         r.removeFromLeft (metric::gridFine);
     }
     r.removeFromLeft (metric::gridFine);
-    route.setBounds (r.removeFromLeft (juce::jmin (104, juce::jmax (0, r.getWidth())))
-                      .withSizeKeepingCentre (juce::jmin (104, juce::jmax (0, r.getWidth())), metric::buttonH - 4));
+    const int routeW = juce::jmin (104, juce::jmax (0, r.getWidth()));
+    route.setBounds (r.removeFromLeft (routeW).withSizeKeepingCentre (routeW, metric::buttonH - 4));
+    // ==== ROUTING (G1) ====
+    r.removeFromLeft (metric::gridFine);
+    routeAmt->setBounds (r.removeFromLeft (juce::jmin (kw, juce::jmax (0, r.getWidth()))));
+    // ==== END ROUTING (G1) ====
 }
 void SurgeonStrip::paint (juce::Graphics& g)
 {
@@ -1124,7 +1134,8 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "  6 FREEZE   (defibrillator) OFFSET / LENGTH / BLUR\n"
         "      Phase-vocoder spectral freeze. BLUR randomises bin phase.\n"
         "  Each strip also has MIX, PROB (chance it acts) and ROUTE IN (feed another\n"
-        "  surgeon's output back through the specimen for feedback stacks).\n"
+        "  surgeon's output back through the specimen for feedback stacks) with AMT\n"
+        "  for how much of it comes back. Loops are limited, so they stay bounded.\n"
         "\n"
         "MOD MATRIX\n"
         "  Four slots. Sources: LFO 1, LFO 2 (each with rate and shape), Env Follow,\n"

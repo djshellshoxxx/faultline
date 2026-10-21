@@ -84,6 +84,17 @@ inline const char* sidRaw (int surgeon, SurgeonParameter parameter) noexcept
     return ids[s][p];
 }
 
+// ==== ROUTING (G1) ====
+// Per-surgeon amount for the Route In source (0..1, default 0.5 = the fixed
+// gain 0.5 that Route In always used, so older sessions sound identical).
+inline const char* routeAmtRaw (int surgeon) noexcept
+{
+    static constexpr const char* ids[kNumSurgeons] {
+        "st_routeAmt", "gr_routeAmt", "rv_routeAmt", "cr_routeAmt", "ro_routeAmt", "fz_routeAmt" };
+    return ids[juce::jlimit (0, kNumSurgeons - 1, surgeon)];
+}
+// ==== END ROUTING (G1) ====
+
 inline const char* surgeonName (int i)
 {
     static const char* n[] { "STUTTER", "GRANULAR", "REVERSE", "CORRUPT", "REORDER", "FREEZE" };
@@ -179,6 +190,9 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         p.add (std::make_unique<F> (pid (sid (s, "p3").toRawUTF8()), nm + " " + paramLabel (s, 2), R { 0.f, 1.f, 0.0001f }, 0.3f));
         p.add (std::make_unique<C> (pid (sid (s, "route").toRawUTF8()), nm + " Route In",
             juce::StringArray { "Off", "from S1", "from S2", "from S3", "from S4", "from S5", "from S6" }, 0));
+        // ==== ROUTING (G1) ====
+        p.add (std::make_unique<F> (pid (sid (s, "routeAmt").toRawUTF8()), nm + " Route Amt", R { 0.f, 1.f, 0.0001f }, 0.5f));
+        // ==== END ROUTING (G1) ====
     }
 
     for (int m = 0; m < kNumModSlots; ++m)

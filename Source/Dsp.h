@@ -472,6 +472,7 @@ public:
     void process (SpecimenBuffer& spec, juce::AudioBuffer<float>& wetOut, int numSamples,
                   const std::array<float, kNumSurgeons>& mix,
                   const std::array<int,   kNumSurgeons>& routeIn,
+                  const std::array<float, kNumSurgeons>& routeAmt,
                   float reinjectAmt) noexcept;
 
     float maxActivity() const noexcept { return maxAct; }
