@@ -20,24 +20,26 @@ using namespace vsx;
 
 static const juce::Identifier kSamplesTag { "VSX_SAMPLES" };
 
-// ==== MUSICAL (F2/F4) ====
-// A session or preset saved by an older version has no entry for the Scale Lock /
-// Dose parameters. They must come back at their defaults, even when this instance
-// currently holds other values (replaceState leaves absent parameters untouched).
-static void defaultAbsentMusicalParams (juce::AudioProcessorValueTreeState& apvts,
-                                        const juce::ValueTree& incoming)
+// A session, preset, A/B slot or history frame saved by an older version has no entry
+// for the 0.10.0 parameters (effects, Scale Lock, Dose, Route Amt). They must come back
+// at their defaults even when this instance currently holds other values, because
+// replaceState leaves absent parameters untouched.
+static void defaultAbsentNewParams (juce::AudioProcessorValueTreeState& apvts,
+                                    const juce::ValueTree& incoming)
 {
-    for (const auto* pid : { id::scaleOn, id::scaleRoot, id::scaleType, id::scaleRange, id::dose })
-    {
-        bool present = false;
-        for (const auto& child : incoming)
-            present = present || (child.hasType ("PARAM") && child.getProperty ("id").toString() == pid);
-        if (! present)
-            if (auto* rp = apvts.getParameter (pid))
-                rp->setValue (rp->getDefaultValue());
-    }
+    juce::StringArray wanted;
+    for (const char* e : effectsParamIds()) wanted.add (e);
+    for (const char* m : { id::scaleOn, id::scaleRoot, id::scaleType, id::scaleRange, id::dose }) wanted.add (m);
+    for (int s = 0; s < kNumSurgeons; ++s) wanted.add (routeAmtRaw (s));
+
+    for (const auto& child : incoming)
+        if (child.hasType ("PARAM"))
+            wanted.removeString (child.getProperty ("id").toString());
+
+    for (const auto& pid : wanted)
+        if (auto* rp = apvts.getParameter (pid))
+            rp->setValueNotifyingHost (rp->getDefaultValue());
 }
-// ==== end MUSICAL (F2/F4) ====
 
 // ===========================================================================
 VivisectProcessor::VivisectProcessor()
@@ -988,7 +990,7 @@ void VivisectProcessor::setStateInformation (const void* data, int size)
             if (samples.isValid())
                 state.removeChild (samples, nullptr);
 
-            defaultAbsentMusicalParams (apvts, state);     // MUSICAL (F2/F4)
+            defaultAbsentNewParams (apvts, state);
 
             apvts.replaceState (state);
             syncFromStateTree();
@@ -1093,25 +1095,10 @@ void VivisectProcessor::restoreSoundState (const juce::ValueTree& source)
     if (currentSettings.isValid())
         next.addChild (currentSettings.createCopy(), -1, nullptr);
 
-    // ==== EFFECTS (E1/E2) ====
-    // Snapshots from before the effect stages existed carry no entry for
-    // them; load those at their defaults rather than leaving stale values.
-    juce::StringArray missingFx;
-    for (const char* fxId : effectsParamIds())
-    {
-        bool found = false;
-        for (int i = 0; i < next.getNumChildren() && ! found; ++i)
-            found = next.getChild (i).getProperty ("id").toString() == fxId;
-        if (! found) missingFx.add (fxId);
-    }
-    // ==== END EFFECTS (E1/E2) ====
-
-    defaultAbsentMusicalParams (apvts, next);               // MUSICAL (F2/F4)
+    // Snapshots from before 0.10.0 carry no entry for the new parameters; load those at
+    // their defaults rather than leaving stale values behind.
+    defaultAbsentNewParams (apvts, next);
     apvts.replaceState (next);
-
-    for (const auto& fxId : missingFx)
-        if (auto* rp = apvts.getParameter (fxId))
-            rp->setValueNotifyingHost (rp->getDefaultValue());
 }
 
 // ===========================================================================
@@ -1290,6 +1277,30 @@ juce::String VivisectProcessor::buildTroubleshootingReport() const
     r << "-- SAMPLE SLOTS -----------------------------------------------\n"
       << "slot A      : " << (slotHasSample (0) ? "loaded" : "empty") << "\n"
       << "slot B      : " << (slotHasSample (1) ? "loaded" : "empty") << "\n";
+    nl();
+
+    r << "-- FEATURES (0.10.0) ------------------------------------------\n";
+    {
+        const auto txt = [this] (const char* pid) -> juce::String
+        {
+            if (auto* p = apvts.getParameter (pid)) return p->getCurrentValueAsText();
+            return "?";
+        };
+        r << "scale lock  : " << txt (id::scaleOn) << ", root " << txt (id::scaleRoot)
+          << ", " << txt (id::scaleType) << ", range " << txt (id::scaleRange) << "\n"
+          << "dose        : " << txt (id::dose) << "\n"
+          << "tourniquet  : " << txt (id::tqOn) << ", " << txt (id::tqMode) << ", cutoff " << txt (id::tqCutoff)
+          << ", reso " << txt (id::tqRes) << ", env " << txt (id::tqEnv) << ", mix " << txt (id::tqMix) << "\n"
+          << "clot        : " << txt (id::clotOn) << ", time " << txt (id::clotTime) << ", feedback "
+          << txt (id::clotFeedback) << ", mix " << txt (id::clotMix) << "\n"
+          << "simple view : " << (simpleViewEnabled() ? "on" : "off") << "\n"
+          << "first-run hint dismissed: " << (firstRunHintDismissed() ? "yes" : "no") << "\n"
+          << "undo / redo : " << undoDepth() << " / " << redoDepth() << " steps\n"
+          << "capture     : " << vsx::describeCaptureState (capture.info()) << ", length setting "
+          << captureBars() << " bar(s)\n"
+          << "captures    : " << capture.directory().getFullPathName() << " ("
+          << capture.list().size() << " take(s))\n";
+    }
     nl();
 
     r << "-- SYSTEM -----------------------------------------------------\n"
@@ -1708,9 +1719,9 @@ void VivisectProcessor::mutateCurrent()
 {
     auto* amountParam = apvts.getParameter (id::mutationAmount);
     if (amountParam == nullptr) return;
-    UndoScope undoStep (*this);                         // F1
     const float amount = juce::jlimit (0.f, 1.f, amountParam->getValue());
-    if (amount <= 0.f) return;
+    if (amount <= 0.f) return;                          // changes nothing, so records nothing
+    UndoScope undoStep (*this);                         // F1
 
     auto mutateContinuous = [this, amount] (const juce::String& pid, float scale = 0.35f)
     {
@@ -2016,6 +2027,19 @@ void VivisectProcessor::clearUndoHistory()
     const juce::ScopedLock sl (undoLock);
     undoStack.clear();
     redoStack.clear();
+    gestureDepth = 0;
+    gestureStart.reset();
+}
+
+void VivisectProcessor::commitOpenUndoGesture()
+{
+    if (gestureDepth > 0 && gestureStart.has_value() && gestureStart->norm != currentNormalised())
+    {
+        const juce::ScopedLock sl (undoLock);
+        undoStack.push_back (std::move (*gestureStart));
+        while ((int) undoStack.size() > kUndoDepth) undoStack.pop_front();
+        redoStack.clear();
+    }
     gestureDepth = 0;
     gestureStart.reset();
 }

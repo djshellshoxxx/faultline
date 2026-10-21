@@ -177,7 +177,8 @@ and uses 120 BPM when there is none. **Feedback** goes to 0.95 and is soft
 clipped inside the loop, so it stays bounded. **Tone** damps the loop (200 Hz to
 16 kHz), **Spread** goes from mono to full ping-pong, **Mix** blends. Time
 changes glide over about 60 ms. Mod destinations: Clot Feedback, Clot Mix.
-Turning Clot off clears the delay line.
+Turning Clot off clears the delay line. The delay line holds 4 seconds, so a
+long note value at a slow tempo is held at 4 s (1/1 below 60 BPM, 1/2 below 30 BPM).
 
 ## Undo / Redo
 
@@ -193,8 +194,10 @@ Keeps pitch scatter in tune. With it on, STUTTER drift, GRANULAR grain pitch and
 REVERSE tail pitch pick a degree of the chosen **Root** and **Scale** (Chromatic,
 Major, Minor, Dorian, Phrygian, Lydian, Mixolydian, Harmonic Minor, Major and
 Minor Pentatonic, Blues, Whole Tone) within **Range** (0 to plus or minus 12
-semitones). Chaos widens the pick but never leaves the scale. Off behaves
-exactly like 0.9.3.
+semitones). Chaos widens the pick but never leaves the scale. While it is on,
+the pitch comes from the scale, so STUTTER DRIFT and the pitch side of GRANULAR
+SPRAY (and their mod destinations) have no effect on pitch. Off behaves exactly
+like 0.9.3.
 
 ## Capture and drag-out
 
@@ -204,7 +207,8 @@ starts at once. Takes are written by a background thread as 24-bit WAV files
 (`Vivisect_<date-time>_<bpm>bpm_<bars>bar.wav`) into a Captures folder, and the
 last eight show in a shelf. Drag a take into the DAW or file manager, or onto
 Sample A or B. Right-click a take to open its folder, rename or delete it.
-CANCEL discards a take in progress.
+CANCEL discards a take in progress. The capture buffer holds 64 seconds, which
+covers 8 bars of 4/4 down to 30 BPM; a longer take is cut at 64 s.
 
 ## DOSE and Simple view
 
@@ -222,8 +226,9 @@ MUTATE and Simple view.
 
 **RANDOM** creates a new sound. The first press starts from the current settings;
 later presses reset unlocked sound controls to their defaults before randomizing.
-Input/output trim, buffer size, source selection, MIDI mode and the hidden
-FLATLINE controls are left alone. If every surgeon switch is locked off, RANDOM
+Input/output trim, buffer size, source selection, MIDI mode, the Scale Root and
+Scale Type (the key of your song) and the hidden FLATLINE controls are left
+alone; MUTATE never touches the Scale Root and Scale Type either. If every surgeon switch is locked off, RANDOM
 keeps them off and Diagnostics explains why the effect is silent.
 
 **MUTATE** makes a nearby variation instead of replacing the sound. Set

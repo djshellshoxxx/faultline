@@ -96,8 +96,13 @@ public:
 
     CaptureShelf& getShelf() noexcept { return shelf; }
 
+    // What the 10 Hz timer does: enable/disable the buttons, notice a finished take
+    // (refresh the shelf, show the "saved" popup). Public so the harness, which has
+    // no running message loop, can drive it.
+    void poll();
+
 private:
-    void timerCallback() override;
+    void timerCallback() override { poll(); }
     void syncLength();
     void showSavedPopup (const CaptureInfo&);
 

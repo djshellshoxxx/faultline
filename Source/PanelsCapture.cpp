@@ -405,7 +405,7 @@ void CapturePanel::showSavedPopup (const CaptureInfo& st)
                                        nullptr);
 }
 
-void CapturePanel::timerCallback()
+void CapturePanel::poll()
 {
     const auto st = proc.captureState();
     const bool idle = st.phase == CapturePhase::idle;

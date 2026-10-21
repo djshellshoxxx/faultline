@@ -222,6 +222,7 @@ VivisectView::VivisectView (VivisectProcessor& p)
     stream.toBack();
 
     addAndMakeVisible (gearBtn);
+    gearBtn.setTooltip ("Options: tool tips on or off, and audio / MIDI device setup when standalone.");
     gearBtn.onClick = [this] { showOverlay (&options); };
 
     for (auto* b : { &aBtn, &bBtn })
@@ -370,6 +371,10 @@ VivisectView::VivisectView (VivisectProcessor& p)
         tips.setTipsEnabled (proc.tooltipsEnabled());
         debug.setCrashLogState (proc.isCrashLogEnabled(),
                                 proc.currentCrashLogFile().getFullPathName());
+        // fresh-install user settings are back: show the first-run hint again, and
+        // let the timer follow the Simple view default
+        hintStrip->setVisible (! proc.firstRunHintDismissed());
+        if (proc.simpleViewEnabled() != simpleView) applySimpleView (proc.simpleViewEnabled());
     };
 
     debug.setCrashLogState (proc.isCrashLogEnabled(),
@@ -418,7 +423,12 @@ VivisectView::VivisectView (VivisectProcessor& p)
     startTimerHz (8);
 }
 
-VivisectView::~VivisectView() { vsx::dismissValueEntry(); setLookAndFeel (nullptr); }
+VivisectView::~VivisectView()
+{
+    vsx::dismissValueEntry();
+    proc.commitOpenUndoGesture();      // a drag cut short by closing the window is still one step
+    setLookAndFeel (nullptr);
+}
 
 // ==== UNDO/CAPTURE hook ====
 bool VivisectView::keyPressed (const juce::KeyPress& k)

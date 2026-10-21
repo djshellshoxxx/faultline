@@ -154,6 +154,10 @@ public:
     bool canUndo() const;
     bool canRedo() const;
     void clearUndoHistory();
+    // The editor closed with a gesture still open (no end message will ever arrive):
+    // keep what the drag changed as one step and close the gesture, so the stack
+    // does not stay wedged at "gesture in progress".
+    void commitOpenUndoGesture();
     int  undoDepth() const;
     int  redoDepth() const;
     juce::String undoLabel() const;          // e.g. "Undo: Chaos 0.40 -> 0.12"

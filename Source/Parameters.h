@@ -235,14 +235,6 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     p.add (std::make_unique<F> (pid (id::scarDrive), "Scar Drive", R { 0.f, 1.f, 0.0001f }, 0.35f));
     p.add (std::make_unique<F> (pid (id::scarMix), "Scar Mix", R { 0.f, 1.f, 0.0001f }, 0.45f));
 
-    // ==== MUSICAL (F2/F4) ====
-    p.add (std::make_unique<B> (pid (id::scaleOn), "Scale Lock", false));
-    p.add (std::make_unique<C> (pid (id::scaleRoot), "Scale Root", scaleRootNames(), 0));
-    p.add (std::make_unique<C> (pid (id::scaleType), "Scale Type", scaleTypeNames(), 2));
-    p.add (std::make_unique<F> (pid (id::scaleRange), "Scale Range", R { 0.f, 1.f, 0.0001f }, 0.35f));
-    p.add (std::make_unique<F> (pid (id::dose), "Dose", R { 0.f, 1.f, 0.0001f }, 0.f));
-    // ==== end MUSICAL (F2/F4) ====
-
     // FLATLINE. Hidden in the UI until the corner notch is clicked, but a real
     // parameter set all the same, so it automates and saves like anything else.
     p.add (std::make_unique<B> (pid (id::flatOn), "Flatline", false));
@@ -275,9 +267,6 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         p.add (std::make_unique<F> (pid (sid (s, "p3").toRawUTF8()), nm + " " + paramLabel (s, 2), R { 0.f, 1.f, 0.0001f }, 0.3f));
         p.add (std::make_unique<C> (pid (sid (s, "route").toRawUTF8()), nm + " Route In",
             juce::StringArray { "Off", "from S1", "from S2", "from S3", "from S4", "from S5", "from S6" }, 0));
-        // ==== ROUTING (G1) ====
-        p.add (std::make_unique<F> (pid (sid (s, "routeAmt").toRawUTF8()), nm + " Route Amt", R { 0.f, 1.f, 0.0001f }, 0.5f));
-        // ==== END ROUTING (G1) ====
     }
 
     for (int m = 0; m < kNumModSlots; ++m)
@@ -290,7 +279,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     }
 
     // ==== EFFECTS (E1/E2) ====
-    // Appended after everything else so existing parameter indices never shift.
+    // Every 0.10.0 parameter (effects, then scale/dose, then route amounts) is appended after
+    // the 0.9.3 layout so no existing parameter index shifts (LV2 ports and CC maps key on it).
     p.add (std::make_unique<B> (pid (id::tqOn), "Tourniquet", false));
     p.add (std::make_unique<C> (pid (id::tqMode), "TQ Mode",
         juce::StringArray { "Low-pass", "Band-pass", "High-pass", "Notch" }, 0));
@@ -308,6 +298,20 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     p.add (std::make_unique<F> (pid (id::clotSpread), "Clot Spread", R { 0.f, 1.f, 0.0001f }, 0.6f));
     p.add (std::make_unique<F> (pid (id::clotMix), "Clot Mix", R { 0.f, 1.f, 0.0001f }, 0.3f));
     // ==== END EFFECTS (E1/E2) ====
+
+    // ==== MUSICAL (F2/F4) ====
+    p.add (std::make_unique<B> (pid (id::scaleOn), "Scale Lock", false));
+    p.add (std::make_unique<C> (pid (id::scaleRoot), "Scale Root", scaleRootNames(), 0));
+    p.add (std::make_unique<C> (pid (id::scaleType), "Scale Type", scaleTypeNames(), 2));
+    p.add (std::make_unique<F> (pid (id::scaleRange), "Scale Range", R { 0.f, 1.f, 0.0001f }, 0.35f));
+    p.add (std::make_unique<F> (pid (id::dose), "Dose", R { 0.f, 1.f, 0.0001f }, 0.f));
+    // ==== end MUSICAL (F2/F4) ====
+
+    // ==== ROUTING (G1) ====
+    for (int s = 0; s < kNumSurgeons; ++s)
+        p.add (std::make_unique<F> (pid (sid (s, "routeAmt").toRawUTF8()),
+                                    juce::String (surgeonName (s)) + " Route Amt", R { 0.f, 1.f, 0.0001f }, 0.5f));
+    // ==== END ROUTING (G1) ====
 
     return p;
 }

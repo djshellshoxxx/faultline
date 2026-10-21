@@ -35,6 +35,8 @@ struct ParamHost
 
 // Right-click menu shared by every control: MIDI map / reset / type a value.
 void showParamContextMenu (ParamHost&, const juce::String& paramID, juce::Component* target);
+// Sets a parameter the way a drag does: begin gesture, set, end gesture (one undo step).
+void setParameterAsGesture (juce::RangedAudioParameter&, float norm);
 // Closes an open "Set value..." dialog; the editor calls it when it is destroyed.
 void dismissValueEntry();
 
@@ -205,8 +207,7 @@ public:
     SurgeonStrip (ParamHost&, int surgeonIndex, std::function<float()> activity);
     void resized() override;
     void paint (juce::Graphics&) override;
-    // ==== MUSICAL (F4) ==== Simple view hides the routing combo only
-    void setRouteVisible (bool v) { route.setVisible (v); }
+    // ==== MUSICAL (F4) ====
     // Simple view: only the ON toggle and MIX stay; PROB, the three parameter knobs,
     // Route In and Route Amt are hidden (they keep working) and the rest re-centres.
     void setSimple (bool simple);
@@ -374,7 +375,6 @@ public:
     std::function<juce::String()>             rawState;     // live parameter dump
     std::function<juce::StringArray()>        warnings;     // misconfiguration hints
     std::function<void (bool)>                onCrashLogToggled;
-    std::function<juce::String()>             crashLogPath;
     std::function<void()>                     onExportTroubleshooting;
     std::function<void()>                     onHardReset;
     std::function<void()>                     onOpenLogFolder;

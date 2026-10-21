@@ -132,12 +132,22 @@ namespace
                 gValueWindow.reset();
                 if (result != 1 || text.isEmpty() || target == nullptr) return;
                 if (auto* p = host.params().getParameter (paramID))
-                    p->setValueNotifyingHost (juce::jlimit (0.f, 1.f, p->getValueForText (text)));
+                    setParameterAsGesture (*p, p->getValueForText (text));
             }), false);
     }
 }
 
 void dismissValueEntry() { gValueWindow.reset(); }
+
+// A menu edit is a UI edit, so it is one complete gesture: that is what lets the
+// processor's undo listener record it as a single step (a bare
+// setValueNotifyingHost would be invisible to UNDO).
+void setParameterAsGesture (juce::RangedAudioParameter& p, float norm)
+{
+    p.beginChangeGesture();
+    p.setValueNotifyingHost (juce::jlimit (0.f, 1.f, norm));
+    p.endChangeGesture();
+}
 
 void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::Component* target)
 {
@@ -169,7 +179,7 @@ void showParamContextMenu (ParamHost& host, const juce::String& paramID, juce::C
                          if (p == nullptr) return;
                          switch (choice)
                          {
-                             case 1: p->setValueNotifyingHost (p->getDefaultValue()); break;
+                             case 1: setParameterAsGesture (*p, p->getDefaultValue()); break;
                              case 2: showValueEntry (host, paramID, safe); break;
                              case 3: host.beginMidiLearnFor (paramID); break;
                              case 4: host.clearCCForParam (paramID); break;
@@ -1137,12 +1147,14 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "                (input level moves the cutoff up to 4 octaves) and MIX. Off = bypass.\n"
         "  CLOT          Post-rack tempo-synced stereo delay (after TOURNIQUET). TIME, FREE\n"
         "                ms, FDBK, TONE (loop damping), SPREAD (mono to ping-pong), MIX.\n"
+        "                The line holds 4 s, so very long notes at slow tempos stop at 4 s.\n"
         "  DOSE          One knob that pushes the whole rack harder: more chaos, trigger\n"
         "                rate and reinject, crunchier CORRUPT bits, harder SCAR drive and a\n"
         "                looser gravity. Zero does nothing.\n"
         "  SCALE LOCK    Keeps pitch scatter in tune. With it on, STUTTER repeats, GRANULAR\n"
         "                grains and REVERSE passes pick a note of the chosen ROOT and SCALE\n"
-        "                within RANGE (up to 12 semitones) instead of drifting freely.\n"
+        "                within RANGE (up to 12 semitones) instead of drifting freely, so\n"
+        "                STUTTER DRIFT and the pitch side of GRANULAR SPRAY do nothing while on.\n"
         "  SIMPLE        Header button. Hides the mod matrix, routing and sidechain panels\n"
         "                for a calmer window. Hidden controls keep working.\n"
         "  MIDI MODE     Suppresses the auto-scheduler. Surgeons only fire from MIDI.\n"
@@ -1191,7 +1203,8 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "  waits for the next bar line; standalone or stopped it starts at once. Takes are\n"
         "  saved as 24-bit WAV files in the Captures folder and the last eight appear in the\n"
         "  shelf. Drag a take into your DAW or onto Sample A / B, or right-click it to open\n"
-        "  its folder, rename or delete it. CANCEL throws the take in progress away.\n"
+        "  its folder, rename or delete it. CANCEL throws the take in progress away. The\n"
+        "  capture buffer holds 64 seconds (8 bars of 4/4 down to 30 BPM); longer is cut off.\n"
         "\n"
         // ==== end UNDO/CAPTURE hook ====
         "LOADING SAMPLES\n"
@@ -1237,8 +1250,10 @@ HelpPanel::HelpPanel() : OverlayPanel ("VIVISECT - HELP")
         "\n"
         "BUTTONS\n"
         "  RANDOM        New sound. Later presses reset unlocked creative controls first;\n"
-        "                locks, I/O, routing, MIDI mode and hidden FLATLINE controls stay put.\n"
+        "                locks, I/O, routing, MIDI mode, the Scale Root / Scale Type (your key)\n"
+        "                and hidden FLATLINE controls stay put.\n"
         "  MUTATE        Nearby variation controlled by MUTATE AMT. Zero makes no changes.\n"
+        "                It leaves the Scale Root / Scale Type alone too.\n"
         "  RESET         Every parameter back to its default, including locked parameters.\n"
         "  A / B         Compare sound snapshots. Tool tips, MIDI mappings and locks stay put.\n"
         "  FREEZE / SAVE Saves sound controls as a timestamped user preset.\n"
@@ -1710,8 +1725,9 @@ DebugPanel::DebugPanel() : OverlayPanel ("VIVISECT - DEBUG")
 
     hardBtn.setColour (juce::TextButton::textColourOffId, col::clip);
     hardBtn.setTooltip ("DESTRUCTIVE. Puts every setting back to its factory default, clears MIDI "
-                        "mappings, forgets loaded samples and A/B, and deletes cached files. Your "
-                        "saved presets are NOT touched. Use this when the plugin will not behave.");
+                        "mappings, forgets loaded samples, A/B and the undo history, and deletes cached "
+                        "files. Your saved presets and captured takes are NOT touched. Use this when "
+                        "the plugin will not behave.");
     hardBtn.onClick = [this]
     {
         // Destructive and not undoable, so it asks first.
@@ -1719,8 +1735,8 @@ DebugPanel::DebugPanel() : OverlayPanel ("VIVISECT - DEBUG")
                         .withIconType (juce::MessageBoxIconType::WarningIcon)
                         .withTitle ("Reset all settings to default?")
                         .withMessage ("This clears every setting, every MIDI mapping, both sample "
-                                      "slots, the A/B snapshots and the cache folder.\n\n"
-                                      "Your saved presets will NOT be deleted.\n\n"
+                                      "slots, the A/B snapshots, the undo history and the cache folder.\n\n"
+                                      "Your saved presets and captured takes will NOT be deleted.\n\n"
                                       "This cannot be undone.")
                         .withButton ("Reset everything")
                         .withButton ("Cancel");

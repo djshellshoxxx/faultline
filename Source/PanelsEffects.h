@@ -19,10 +19,6 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    // Suggested size; the host view may give the panel any rectangle >= this.
-    static constexpr int preferredWidth  = 480;
-    static constexpr int preferredHeight = 136;
-
 private:
     void timerCallback() override;
     void updateFreeState();
