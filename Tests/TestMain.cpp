@@ -150,6 +150,29 @@ std::map<String, float> snapshotParams (VivisectProcessor& p)
 } // namespace
 
 // ===========================================================================
+// ---------------------------------------------------------------------------
+//  Per-feature test files. Each Tests<Name>.inc is optional, is included here
+//  (after the helpers above, so check()/beginCase()/runBlocks() are usable) and
+//  defines `static void run_<name>_tests (double kRate, int kBlock)`. Keeping
+//  them separate means feature branches never conflict inside main().
+// ---------------------------------------------------------------------------
+#if __has_include("TestsEffects.inc")
+#include "TestsEffects.inc"
+#define VSX_HAVE_EFFECTS_TESTS 1
+#endif
+#if __has_include("TestsMusical.inc")
+#include "TestsMusical.inc"
+#define VSX_HAVE_MUSICAL_TESTS 1
+#endif
+#if __has_include("TestsUndoCapture.inc")
+#include "TestsUndoCapture.inc"
+#define VSX_HAVE_UNDO_CAPTURE_TESTS 1
+#endif
+#if __has_include("TestsRouting.inc")
+#include "TestsRouting.inc"
+#define VSX_HAVE_ROUTING_TESTS 1
+#endif
+
 int main()
 {
     // Unbuffered, so a CI log keeps everything up to an abnormal exit.
@@ -1498,6 +1521,20 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    // Per-feature suites (see the includes above).
+#ifdef VSX_HAVE_EFFECTS_TESTS
+    run_effects_tests (kRate, kBlock);
+#endif
+#ifdef VSX_HAVE_MUSICAL_TESTS
+    run_musical_tests (kRate, kBlock);
+#endif
+#ifdef VSX_HAVE_UNDO_CAPTURE_TESTS
+    run_undo_capture_tests (kRate, kBlock);
+#endif
+#ifdef VSX_HAVE_ROUTING_TESTS
+    run_routing_tests (kRate, kBlock);
+#endif
+
     std::printf ("\n=====================\n%d checks, %d failed\n", checksRun, checksFailed);
     return checksFailed == 0 ? 0 : 1;
 }
