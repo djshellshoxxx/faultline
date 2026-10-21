@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 #include "Parameters.h"
+#include "Musical.h"
 
 // ============================================================================
 //  VIVISECT DSP CORE
@@ -434,6 +435,9 @@ public:
     virtual void prepare (double sr, int maxBlock) = 0;
     virtual void reset() = 0;
     virtual void setParams (float p1, float p2, float p3) { pp1 = p1; pp2 = p2; pp3 = p3; }
+    // ==== MUSICAL (F2) ====
+    void setScale (const ScaleLock& s) noexcept { scale = s; }
+    // ==== end MUSICAL (F2) ====
     virtual void trigger (const TriggerContext& ctx) = 0;
     virtual void process (juce::AudioBuffer<float>& add, int numSamples) = 0;
 
@@ -446,6 +450,7 @@ protected:
 
     double sr = 44100.0;
     float  pp1 = 0.35f, pp2 = 0.4f, pp3 = 0.3f;
+    ScaleLock scale;        // ==== MUSICAL (F2) ==== Off by default: legacy pitch behaviour
     float  act = 0.f;
     std::atomic<i64> lastGrabStart { 0 };
     std::atomic<int> lastGrabLen   { 0 };

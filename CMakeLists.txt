@@ -68,7 +68,8 @@ target_sources(Vivisect PRIVATE
     Source/Theme.cpp
     Source/Ui.cpp
     Source/PanelsEffects.cpp
-    Source/PanelsCapture.cpp)
+    Source/PanelsCapture.cpp
+    Source/PanelsMusical.cpp)
 
 target_include_directories(Vivisect PRIVATE Source)
 

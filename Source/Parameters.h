@@ -57,6 +57,13 @@ namespace id
     constexpr auto clotSpread      = "clotSpread";
     constexpr auto clotMix         = "clotMix";
     // ==== END EFFECTS (E1/E2) ====
+    // ==== MUSICAL (F2/F4) ====
+    constexpr auto scaleOn         = "scaleOn";
+    constexpr auto scaleRoot       = "scaleRoot";
+    constexpr auto scaleType       = "scaleType";
+    constexpr auto scaleRange      = "scaleRange";
+    constexpr auto dose            = "dose";
+    // ==== end MUSICAL (F2/F4) ====
 
     // --- FLATLINE: the hidden effect behind the corner notch ----------------
     constexpr auto flatOn         = "flatOn";
@@ -77,6 +84,40 @@ namespace id
     constexpr auto macro1    = "macro1";
     constexpr auto macro2    = "macro2";
 }
+
+// ==== MUSICAL (F2/F4) ====
+inline juce::StringArray scaleRootNames()
+{
+    return { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+}
+inline juce::StringArray scaleTypeNames()
+{
+    return { "Chromatic", "Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
+             "Harm. Minor", "Maj Pentatonic", "Min Pentatonic", "Blues", "Whole Tone" };
+}
+
+// DOSE (F4): x_eff = x + dose * k * (1 - x), or x - dose * k * x for Gravity Pull.
+// Identity at dose 0; monotonic in dose; clamped to 0..1.
+namespace dosek
+{
+    constexpr float chaos = 0.60f, triggerRate = 0.50f, reinject = 0.25f,
+                    corruptBits = 0.50f, scarDrive = 0.40f, gravityPull = 0.30f;
+}
+inline float doseUp (float x, float dose, float k) noexcept
+{
+    if (dose <= 0.f) return x;                       // exact identity
+    const float d = dose > 1.f ? 1.f : dose;
+    const float y = x + d * k * (1.f - x);
+    return y < 0.f ? 0.f : (y > 1.f ? 1.f : y);
+}
+inline float doseDown (float x, float dose, float k) noexcept
+{
+    if (dose <= 0.f) return x;
+    const float d = dose > 1.f ? 1.f : dose;
+    const float y = x - d * k * x;
+    return y < 0.f ? 0.f : (y > 1.f ? 1.f : y);
+}
+// ==== end MUSICAL (F2/F4) ====
 
 inline juce::String surgeonTag (int i)
 {
@@ -193,6 +234,14 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     p.add (std::make_unique<B> (pid (id::scarOn), "Scar", false));
     p.add (std::make_unique<F> (pid (id::scarDrive), "Scar Drive", R { 0.f, 1.f, 0.0001f }, 0.35f));
     p.add (std::make_unique<F> (pid (id::scarMix), "Scar Mix", R { 0.f, 1.f, 0.0001f }, 0.45f));
+
+    // ==== MUSICAL (F2/F4) ====
+    p.add (std::make_unique<B> (pid (id::scaleOn), "Scale Lock", false));
+    p.add (std::make_unique<C> (pid (id::scaleRoot), "Scale Root", scaleRootNames(), 0));
+    p.add (std::make_unique<C> (pid (id::scaleType), "Scale Type", scaleTypeNames(), 2));
+    p.add (std::make_unique<F> (pid (id::scaleRange), "Scale Range", R { 0.f, 1.f, 0.0001f }, 0.35f));
+    p.add (std::make_unique<F> (pid (id::dose), "Dose", R { 0.f, 1.f, 0.0001f }, 0.f));
+    // ==== end MUSICAL (F2/F4) ====
 
     // FLATLINE. Hidden in the UI until the corner notch is clicked, but a real
     // parameter set all the same, so it automates and saves like anything else.
