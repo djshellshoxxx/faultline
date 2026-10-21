@@ -528,6 +528,54 @@ int main()
     }
 
     // -----------------------------------------------------------------------
+    beginCase ("0.10.0 factory presets showcase the new stages");
+    {
+        VivisectProcessor p;
+        p.prepareToPlay (kRate, kBlock);
+        const auto names = p.getPresetNames();
+        check (VivisectProcessor::numFactoryPresets >= 14, "at least 8 presets were added to the six vibes");
+        check (names.size() >= VivisectProcessor::numFactoryPresets, "all factory names are listed");
+        check (names[0] == "Clean Specimen" && names[5] == "SOPHIE-adjacent", "the original six keep their slots");
+
+        StringArray seen;
+        std::vector<std::map<String, float>> snaps;
+        bool usesNew = true, quiet = true, resetsOld = true;
+        String loud;
+        for (int i = 6; i < VivisectProcessor::numFactoryPresets; ++i)
+        {
+            check (! seen.contains (names[i]), "preset name '" + names[i] + "' is unique");
+            seen.add (names[i]);
+            p.resetAllToDefaults();
+            p.loadPreset (i);
+            const auto s = snapshotParams (p);
+            snaps.push_back (s);
+
+            auto at = [&] (const char* k) { return s.at (k); };
+            const bool any = at ("tqOn") > 0.5f || at ("clotOn") > 0.5f || at ("scaleOn") > 0.5f
+                          || at ("dose") > 0.f || at ("st_routeAmt") >= 0.f
+                          && (at ("gr_route") > 0.f || at ("ro_route") > 0.f || at ("st_route") > 0.f);
+            usesNew = usesNew && any;
+
+            const auto v = runBlocks (p, 400, kBlock, kRate);
+            if (! v.finite || v.peak > 0.89f) { quiet = false; loud += names[i] + " (" + String (v.peak, 2) + ") "; }
+
+            // loading an original vibe afterwards must clear every new stage again
+            p.loadPreset (0);
+            const auto z = snapshotParams (p);
+            resetsOld = resetsOld && z.at ("tqOn") < 0.5f && z.at ("clotOn") < 0.5f
+                     && z.at ("scaleOn") < 0.5f && z.at ("dose") == 0.f;
+        }
+        check (usesNew, "every new preset turns on TOURNIQUET, CLOT, Scale Lock, DOSE or routing");
+        check (quiet, "new presets peak at or below about -1 dBFS on the test signal: " + loud);
+        check (resetsOld, "older presets keep the new parameters at defaults");
+        bool distinct = true;
+        for (size_t a = 0; a < snaps.size(); ++a)
+            for (size_t b = a + 1; b < snaps.size(); ++b)
+                distinct = distinct && snaps[a] != snaps[b];
+        check (distinct, "new presets are all different from each other");
+    }
+
+    // -----------------------------------------------------------------------
     //  Regression: the preset menu and the preset loader used to enumerate the
     //  folder separately, so a folder that changed between building the menu
     //  and picking from it could load the wrong preset.

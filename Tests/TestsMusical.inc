@@ -494,16 +494,17 @@ static void run_musical_tests (double kRate, int kBlock)
                "A/B other slot keeps its own values");
         p.selectABSlot (0);
 
-        // presets: every factory preset resets dose / scale to defaults
+        // presets: the six original vibes reset dose / scale to defaults
+        // (the 0.10.0 presets deliberately use them; see TestMain "0.10.0 factory presets")
         bool presetsClean = true;
-        for (int i = 0; i < VivisectProcessor::numFactoryPresets; ++i)
+        for (int i = 0; i < 6; ++i)
         {
             setv (vsx::id::dose, 0.8f); setv (vsx::id::scaleOn, 1.f); setv (vsx::id::scaleRange, 0.9f);
             p.loadPreset (i);
             presetsClean = presetsClean && val (vsx::id::dose) == 0.f && val (vsx::id::scaleOn) < 0.5f
                 && std::abs (val (vsx::id::scaleRange) - 0.35f) < 1.0e-6f;
         }
-        check (presetsClean, "factory presets carry dose 0 and Scale Lock off");
+        check (presetsClean, "original six factory presets carry dose 0 and Scale Lock off");
 
         // a saved user preset round-trips the new parameters
         setv (vsx::id::dose, 0.55f); setv (vsx::id::scaleOn, 1.f); setv (vsx::id::scaleRoot, 3.f / 11.f);

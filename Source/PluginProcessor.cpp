@@ -707,7 +707,11 @@ juce::Array<juce::File> VivisectProcessor::getUserPresetFiles() const
 juce::StringArray VivisectProcessor::getPresetNames() const
 {
     juce::StringArray names { "Clean Specimen", "Late 90s Bristol", "Berlin Basement",
-                              "Warp 1995", "Modern Hyperpop", "SOPHIE-adjacent" };
+                              "Warp 1995", "Modern Hyperpop", "SOPHIE-adjacent",
+                              // 0.10.0: showcase the new stages
+                              "Tourniquet Sweep", "Clot Dub Smear", "Minor Key Shrapnel",
+                              "Dose Ramp", "Feedback Ward", "Notch Ghost",
+                              "Telephone Gate", "Whole Tone Haze" };
     jassert (names.size() == numFactoryPresets);
     for (const auto& f : getUserPresetFiles())
         names.add ("* " + f.getFileNameWithoutExtension());
@@ -765,6 +769,16 @@ std::map<juce::String, float> VivisectProcessor::factoryPreset (int index) const
     std::map<juce::String, float> m;
     auto set = [&] (const juce::String& k, float v) { m[k] = v; };
     auto S = [] (int i, const char* s) { return sid (i, s); };
+    // Real (un-normalised) value, for the 0.10.0 presets: Hz, ms, choice index.
+    auto real = [&] (const juce::String& k, float v)
+    {
+        if (auto* p = apvts.getParameter (k)) m[k] = p->convertTo0to1 (v);
+    };
+    auto only = [&] (std::initializer_list<int> on)       // surgeons on, everything else off
+    {
+        for (int s = 0; s < kNumSurgeons; ++s) set (S (s, "on"), 0.f);
+        for (int s : on) set (S (s, "on"), 1.f);
+    };
 
     switch (index)
     {
@@ -824,6 +838,98 @@ std::map<juce::String, float> VivisectProcessor::factoryPreset (int index) const
             set (S (S_FREEZE, "p1"), 0.3f); set (S (S_FREEZE, "p3"), 0.2f);
             set (S (S_STUTTER, "on"), 1); set (S (S_STUTTER, "mix"), 1.f); set (S (S_STUTTER, "p2"), 0.6f);
             set (S (S_REVERSE, "on"), 1); set (S (S_REVERSE, "mix"), 0.3f); set (S (S_REVERSE, "prob"), 0.2f);
+            break;
+        case 6: // Tourniquet Sweep - low-pass that opens on every hit
+            set (id::chaos, 0.38f); set (id::gravityPull, 0.8f); set (id::dryWet, 0.85f);
+            set (id::triggerRate, 0.5f);
+            only ({ S_STUTTER, S_GRANULAR });
+            set (S (S_STUTTER, "mix"), 0.9f); set (S (S_STUTTER, "p2"), 0.45f);
+            set (S (S_GRANULAR, "mix"), 0.5f); set (S (S_GRANULAR, "prob"), 0.35f);
+            set (id::tqOn, 1.f); real (id::tqMode, 0); real (id::tqCutoff, 650.f);
+            set (id::tqRes, 0.6f); set (id::tqEnv, 0.75f); set (id::tqMix, 1.f);
+            real (id::outputTrim, -7.5f);   // level-matched to the other presets
+            break;
+        case 7: // Clot Dub Smear - dotted-quarter echoes smeared over reversed slices
+            set (id::chaos, 0.32f); set (id::gravityPull, 0.7f); set (id::dryWet, 0.7f);
+            set (id::triggerRate, 0.3f); set (id::reinject, 0.15f);
+            only ({ S_REVERSE, S_GRANULAR, S_FREEZE });
+            set (S (S_REVERSE, "mix"), 0.8f); set (S (S_REVERSE, "prob"), 0.45f); set (S (S_REVERSE, "p3"), 0.7f);
+            set (S (S_GRANULAR, "mix"), 0.45f); set (S (S_GRANULAR, "prob"), 0.3f);
+            set (S (S_FREEZE, "mix"), 0.4f); set (S (S_FREEZE, "prob"), 0.15f);
+            set (id::clotOn, 1.f); real (id::clotTime, 5); set (id::clotFeedback, 0.62f);
+            real (id::clotTone, 2800.f); set (id::clotSpread, 0.9f); set (id::clotMix, 0.42f);
+            set (id::tqOn, 1.f); real (id::tqMode, 0); real (id::tqCutoff, 5200.f); set (id::tqRes, 0.15f);
+            real (id::outputTrim, -3.0f);   // level-matched to the other presets
+            break;
+        case 8: // Minor Key Shrapnel - A minor pentatonic scatter, stays in tune
+            set (id::chaos, 0.5f); set (id::gravityPull, 0.75f); set (id::dryWet, 0.8f);
+            set (id::triggerRate, 0.5f);
+            only ({ S_STUTTER, S_GRANULAR, S_REVERSE });
+            set (S (S_STUTTER, "mix"), 1.f); set (S (S_STUTTER, "prob"), 0.65f);
+            set (S (S_STUTTER, "p2"), 0.7f); set (S (S_STUTTER, "p3"), 0.9f);
+            set (S (S_GRANULAR, "mix"), 0.6f); set (S (S_GRANULAR, "p1"), 0.2f); set (S (S_GRANULAR, "p2"), 0.65f);
+            set (S (S_REVERSE, "mix"), 0.45f); set (S (S_REVERSE, "prob"), 0.3f); set (S (S_REVERSE, "p3"), 0.8f);
+            set (id::scaleOn, 1.f); real (id::scaleRoot, 9); real (id::scaleType, 9); set (id::scaleRange, 0.75f);
+            break;
+        case 9: // Dose Ramp - tame at zero, nasty at full; ride the DOSE knob
+            set (id::chaos, 0.12f); set (id::gravityPull, 0.9f); set (id::dryWet, 0.85f);
+            set (id::triggerRate, 0.15f); set (id::reinject, 0.05f);
+            only ({ S_STUTTER, S_CORRUPT, S_REORDER });
+            set (S (S_STUTTER, "mix"), 0.9f); set (S (S_STUTTER, "p2"), 0.3f);
+            set (S (S_CORRUPT, "mix"), 0.6f); set (S (S_CORRUPT, "prob"), 0.35f); set (S (S_CORRUPT, "p1"), 0.3f);
+            set (S (S_REORDER, "mix"), 0.7f); set (S (S_REORDER, "prob"), 0.3f);
+            set (id::scarOn, 1.f); set (id::scarDrive, 0.3f); set (id::scarMix, 0.4f);
+            set (id::dose, 0.45f);
+            real (id::outputTrim, -2.0f);   // level-matched to the other presets
+            break;
+        case 10: // Feedback Ward - surgeons feed each other in a ring, kept bounded by Route Amt
+            set (id::chaos, 0.42f); set (id::gravityPull, 0.65f); set (id::dryWet, 0.88f);
+            set (id::triggerRate, 0.4f); set (id::reinject, 0.2f);
+            only ({ S_STUTTER, S_GRANULAR, S_REORDER });
+            set (S (S_STUTTER, "mix"), 0.8f);
+            set (S (S_GRANULAR, "mix"), 0.55f); set (S (S_GRANULAR, "prob"), 0.4f);
+            set (S (S_REORDER, "mix"), 0.7f); set (S (S_REORDER, "prob"), 0.4f);
+            real (S (S_GRANULAR, "route"), 1); real (S (S_GRANULAR, "routeAmt"), 0.55f);
+            real (S (S_REORDER, "route"), 2);  real (S (S_REORDER, "routeAmt"), 0.7f);
+            real (S (S_STUTTER, "route"), 5);  real (S (S_STUTTER, "routeAmt"), 0.35f);
+            break;
+        case 11: // Notch Ghost - sparse freeze pads with a swept notch and triplet echoes
+            set (id::chaos, 0.25f); set (id::gravityPull, 0.6f); set (id::dryWet, 0.65f);
+            set (id::triggerRate, 0.2f);
+            only ({ S_FREEZE, S_REVERSE });
+            set (S (S_FREEZE, "mix"), 0.7f); set (S (S_FREEZE, "prob"), 0.3f); set (S (S_FREEZE, "p3"), 0.5f);
+            set (S (S_REVERSE, "mix"), 0.5f); set (S (S_REVERSE, "prob"), 0.25f);
+            set (id::tqOn, 1.f); real (id::tqMode, 3); real (id::tqCutoff, 1800.f);
+            set (id::tqRes, 0.7f); set (id::tqEnv, -0.5f); set (id::tqMix, 1.f);
+            set (id::clotOn, 1.f); real (id::clotTime, 1); set (id::clotFeedback, 0.5f);
+            real (id::clotTone, 3500.f); set (id::clotSpread, 0.75f); set (id::clotMix, 0.3f);
+            real (id::outputTrim, -2.5f);   // level-matched to the other presets
+            break;
+        case 12: // Telephone Gate - band-limited crunch with tight 1/16 slap
+            set (id::chaos, 0.55f); set (id::gravityPull, 0.85f); set (id::dryWet, 0.9f);
+            set (id::triggerRate, 0.55f);
+            only ({ S_STUTTER, S_CORRUPT });
+            set (S (S_STUTTER, "mix"), 1.f); set (S (S_STUTTER, "prob"), 0.7f); set (S (S_STUTTER, "p2"), 0.8f);
+            set (S (S_CORRUPT, "mix"), 0.85f); set (S (S_CORRUPT, "prob"), 0.5f);
+            set (S (S_CORRUPT, "p1"), 0.55f); set (S (S_CORRUPT, "p3"), 0.3f);
+            set (id::tqOn, 1.f); real (id::tqMode, 1); real (id::tqCutoff, 1700.f);
+            set (id::tqRes, 0.45f); set (id::tqMix, 1.f);
+            set (id::clotOn, 1.f); real (id::clotTime, 0); set (id::clotFeedback, 0.25f);
+            real (id::clotTone, 3000.f); set (id::clotSpread, 0.3f); set (id::clotMix, 0.25f);
+            break;
+        case 13: // Whole Tone Haze - dense dreamy grains in D whole tone, long echoes
+            set (id::chaos, 0.4f); set (id::gravityPull, 0.5f); set (id::dryWet, 0.75f);
+            set (id::triggerRate, 0.45f); set (id::reinject, 0.3f);
+            only ({ S_GRANULAR, S_FREEZE, S_STUTTER });
+            set (S (S_GRANULAR, "mix"), 0.8f); set (S (S_GRANULAR, "prob"), 0.7f);
+            set (S (S_GRANULAR, "p1"), 0.3f); set (S (S_GRANULAR, "p2"), 0.8f); set (S (S_GRANULAR, "p3"), 0.5f);
+            set (S (S_FREEZE, "mix"), 0.5f); set (S (S_FREEZE, "prob"), 0.2f); set (S (S_FREEZE, "p3"), 0.8f);
+            set (S (S_STUTTER, "mix"), 0.4f); set (S (S_STUTTER, "prob"), 0.3f); set (S (S_STUTTER, "p3"), 0.8f);
+            set (id::scaleOn, 1.f); real (id::scaleRoot, 2); real (id::scaleType, 11); set (id::scaleRange, 0.6f);
+            set (id::tqOn, 1.f); real (id::tqMode, 2); real (id::tqCutoff, 250.f); set (id::tqRes, 0.2f);
+            set (id::clotOn, 1.f); real (id::clotTime, 6); set (id::clotFeedback, 0.7f);
+            real (id::clotTone, 2200.f); set (id::clotSpread, 1.f); set (id::clotMix, 0.45f);
+            real (id::outputTrim, -4.0f);   // level-matched to the other presets
             break;
         default: // Clean Specimen — defaults
             break;

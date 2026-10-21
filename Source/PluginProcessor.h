@@ -81,7 +81,7 @@ public:
     // the right preset loading even if the folder changed since the menu was
     // built - which the "Open Preset Folder" item actively invites.
     bool loadPresetByName (const juce::String& displayName);
-    static constexpr int numFactoryPresets = 6;
+    static constexpr int numFactoryPresets = 14;   // 6 original vibes + 8 added in 0.10.0
     void saveUserPreset (const juce::String& name);
     juce::File getUserPresetDir() const;
 
