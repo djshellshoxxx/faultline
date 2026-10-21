@@ -54,7 +54,8 @@ target_sources(Vivisect PRIVATE
     Source/PluginEditor.cpp
     Source/Dsp.cpp
     Source/Theme.cpp
-    Source/Ui.cpp)
+    Source/Ui.cpp
+    Source/PanelsCapture.cpp)
 
 target_include_directories(Vivisect PRIVATE Source)
 

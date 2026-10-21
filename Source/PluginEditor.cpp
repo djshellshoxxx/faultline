@@ -24,12 +24,15 @@ namespace
     constexpr int kModRowH    = 26;
     constexpr int kHistoryH   = 24;
     constexpr int kFooterH    = 16;
+    constexpr int kCaptureH   = 48;      // UNDO/CAPTURE hook: capture row (button, length, shelf)
     constexpr int kG          = metric::grid;      // 8
     constexpr int kPad        = metric::pad;       // 16
 
     constexpr int kH = kHeaderH + kG + kMonitorH + kG + kMasterH + kG + kIoH + kG
                      + kNumSurgeons * kStripH + kG + kBtnRowH + kG
-                     + kSectionH + kModHeadH + kNumModSlots * kModRowH + kG + kHistoryH + kG + kFooterH;
+                     + kSectionH + kModHeadH + kNumModSlots * kModRowH + kG + kHistoryH
+                     + kG + kCaptureH            // UNDO/CAPTURE hook
+                     + kG + kFooterH;
 }
 
 // ===========================================================================
@@ -208,6 +211,20 @@ VivisectView::VivisectView (VivisectProcessor& p)
     aBtn.setToggleState (proc.currentABSlot() == 0, juce::dontSendNotification);
     bBtn.setToggleState (proc.currentABSlot() == 1, juce::dontSendNotification);
 
+    // ==== UNDO/CAPTURE hook ====
+    setWantsKeyboardFocus (true);
+    addAndMakeVisible (undoBtn);
+    addAndMakeVisible (redoBtn);
+    undoBtn.setTooltip ("Undo the last change to the sound controls (Ctrl/Cmd+Z).");
+    redoBtn.setTooltip ("Redo the change you just undid (Ctrl/Cmd+Shift+Z or Ctrl+Y).");
+    undoBtn.onClick = [this] { proc.undo(); };
+    redoBtn.onClick = [this] { proc.redo(); };
+    undoBtn.setEnabled (proc.canUndo());
+    redoBtn.setEnabled (proc.canRedo());
+    addAndMakeVisible (capturePanel);
+    capturePanel.setLoadIntoSlotHandler ([this] (int slot, const juce::File& f) { loadSampleWithFeedback (slot, f); });
+    // ==== end UNDO/CAPTURE hook ====
+
     // -- random / reset / save ----------------------------------------------
     addAndMakeVisible (randomBtn);
     randomBtn.setColour (juce::TextButton::buttonOnColourId, col::accent2);
@@ -260,6 +277,11 @@ VivisectView::VivisectView (VivisectProcessor& p)
           << "sample B     " << (proc.slotHasSample (1) ? "loaded" : "empty") << "\n"
           << "A/B slot     " << (proc.currentABSlot() == 0 ? "A" : "B") << "\n"
           << "history      " << proc.historyCount() << " frames\n"
+          // ==== UNDO/CAPTURE hook ====
+          << "undo / redo  " << proc.undoDepth() << " / " << proc.redoDepth() << " steps\n"
+          << "capture      " << vsx::describeCaptureState (proc.captureState()) << "\n"
+          << "capture dir  " << proc.captureDirectory().getFullPathName() << "\n"
+          // ==== end UNDO/CAPTURE hook ====
           << "\n";
         for (auto* parameter : proc.getParameters())
             if (auto* wid = dynamic_cast<juce::AudioProcessorParameterWithID*> (parameter))
@@ -349,6 +371,29 @@ VivisectView::VivisectView (VivisectProcessor& p)
 
 VivisectView::~VivisectView() { vsx::dismissValueEntry(); setLookAndFeel (nullptr); }
 
+// ==== UNDO/CAPTURE hook ====
+bool VivisectView::keyPressed (const juce::KeyPress& k)
+{
+    const auto m = k.getModifiers();
+    if (! (m.isCommandDown() || m.isCtrlDown()) || m.isAltDown())
+        return false;
+
+    int code = k.getKeyCode();
+    if (code >= 'a' && code <= 'z') code -= 'a' - 'A';
+    if (code == 'Z')
+    {
+        if (m.isShiftDown()) proc.redo(); else proc.undo();
+        return true;
+    }
+    if (code == 'Y' && ! m.isShiftDown())
+    {
+        proc.redo();
+        return true;
+    }
+    return false;
+}
+// ==== end UNDO/CAPTURE hook ====
+
 // ===========================================================================
 void VivisectView::beginMidiLearnFor (const juce::String& paramID)
 {
@@ -359,6 +404,12 @@ void VivisectView::beginMidiLearnFor (const juce::String& paramID)
 
 void VivisectView::timerCallback()
 {
+    // ==== UNDO/CAPTURE hook ====
+    undoBtn.setEnabled (proc.canUndo());
+    redoBtn.setEnabled (proc.canRedo());
+    undoBtn.setTooltip (proc.undoLabel());
+    redoBtn.setTooltip (proc.redoLabel());
+    // ==== end UNDO/CAPTURE hook ====
 
     // the audio thread clears the learn target as soon as it sees a CC
     const auto t = proc.midiLearnTarget();
@@ -721,6 +772,12 @@ void VivisectView::resized()
     presetBox.setBounds (right.removeFromRight (208).withSizeKeepingCentre (208, 24));
     right.removeFromRight (kG / 2);
     menuBtn.setBounds (right.removeFromRight (72).withSizeKeepingCentre (72, 24));
+    // ==== UNDO/CAPTURE hook ====
+    right.removeFromRight (kG);
+    redoBtn.setBounds (right.removeFromRight (52).withSizeKeepingCentre (52, 24));
+    right.removeFromRight (2);
+    undoBtn.setBounds (right.removeFromRight (52).withSizeKeepingCentre (52, 24));
+    // ==== end UNDO/CAPTURE hook ====
 
     // -- monitor -------------------------------------------------------------
     r.removeFromTop (kG);
@@ -840,6 +897,11 @@ void VivisectView::resized()
     // -- history -------------------------------------------------------------
     r.removeFromTop (kG);
     history.setBounds (r.removeFromTop (kHistoryH).reduced (kPad, 0));
+
+    // ==== UNDO/CAPTURE hook ====
+    r.removeFromTop (kG);
+    capturePanel.setBounds (r.removeFromTop (kCaptureH).reduced (kPad, 0));
+    // ==== end UNDO/CAPTURE hook ====
 
     // The secret panel slides out from the corner it lives behind.
     if (secret.isVisible())

@@ -72,6 +72,7 @@ juce::File userPresetDir();
 juce::String userPresetDirPath();
 juce::File userLogDir();        // crash logs + troubleshooting reports
 juce::File userCacheDir();      // scratch the hard reset is allowed to wipe
+juce::File userCapturesDir();   // F3 captured takes (<user data>/Captures)
 
 // Open a URL, or a mail composer for the support address.
 void openHomePage();

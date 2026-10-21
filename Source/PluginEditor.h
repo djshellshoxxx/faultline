@@ -5,6 +5,9 @@
 #include <vector>
 #include "PluginProcessor.h"
 #include "Ui.h"
+// ==== UNDO/CAPTURE hook ====
+#include "PanelsCapture.h"
+// ==== end UNDO/CAPTURE hook ====
 
 // The whole UI, laid out at a fixed design size. VivisectEditor below scales
 // it as one piece, which is how JUCE wants a zoomable editor built: the host
@@ -12,6 +15,9 @@
 class VivisectView : public juce::Component,
                        public vsx::ParamHost,
                        public juce::FileDragAndDropTarget,
+                       // ==== UNDO/CAPTURE hook ==== (drag-out of captured takes)
+                       public juce::DragAndDropContainer,
+                       // ==== end UNDO/CAPTURE hook ====
                        private juce::Timer
 {
 public:
@@ -24,6 +30,9 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    // ==== UNDO/CAPTURE hook ==== Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl+Y
+    bool keyPressed (const juce::KeyPress&) override;
+    // ==== end UNDO/CAPTURE hook ====
 
     // Drag and drop — any audio file dropped on the editor loads into a slot.
     bool isInterestedInFileDrag (const juce::StringArray&) override;
@@ -95,6 +104,11 @@ private:
     vsx::VsxButton  menuBtn { "MENU" };
     vsx::VsxButton  aBtn { "A" }, bBtn { "B" }, copyBtn { "COPY" };
     vsx::GearButton gearBtn;
+
+    // ==== UNDO/CAPTURE hook ====
+    vsx::VsxButton undoBtn { "UNDO" }, redoBtn { "REDO" };
+    vsx::CapturePanel capturePanel { proc };
+    // ==== end UNDO/CAPTURE hook ====
 
     // action buttons
     vsx::VsxButton randomBtn { "RANDOM" }, mutateBtn { "MUTATE" }, resetBtn { "RESET" }, saveBtn { "FREEZE / SAVE" };
