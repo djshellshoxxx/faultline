@@ -127,6 +127,8 @@ void VivisectProcessor::prepareToPlay (double sr, int block)
     sampleRate = sr;
     capture.prepare (sr);                       // F3: allocate the take buffer here, never on the audio thread
     specimen.prepare (sr, 45.0);
+    keyBuf.assign ((size_t) kKeyWindow, 0.f);
+    keyState.store (0);
     analysis.prepare (sr);
     rack.prepare (sr, block);
     scheduler.prepare (sr);
@@ -288,19 +290,28 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
 
     // ---- musical clock ----------------------------------------------------
     double bpm = lastBpm, ppq = 0.0;
+    bool hostBpm = false;
     bool playing = false;
     double barQuarters = 4.0;                       // capture: bar length in quarter notes
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
         {
-            if (pos->getBpm())         bpm = *pos->getBpm();
+            if (pos->getBpm())         { bpm = *pos->getBpm(); hostBpm = true; }
             if (pos->getPpqPosition()) ppq = *pos->getPpqPosition();
             playing = pos->getIsPlaying();
             if (auto ts = pos->getTimeSignature())
                 barQuarters = vsx::capture::barQuarters (ts->numerator, ts->denominator);
         }
+    if (! hostBpm)                                  // H1: tapped tempo when the host gives none
+    {
+        const double fb = tempoFallbackBpm.load (std::memory_order_relaxed);
+        if (fb > 0.0) bpm = fb;
+        else if (! hostTempoSeen.load (std::memory_order_relaxed)) bpm = 120.0;   // never had a host tempo: default
+    }
     bpm = juce::jlimit (20.0, 300.0, bpm);
     lastBpm = bpm;
+    shownBpm.store ((float) bpm, std::memory_order_relaxed);
+    hostTempoSeen.store (hostBpm, std::memory_order_relaxed);
     telem.pushSimple (vsx::TelemetryEvent::Kind::clock, (float) bpm, (float) ppq,
                       playing ? 1 : 0);
     const double spb = 60.0 / bpm * sampleRate;
@@ -406,6 +417,7 @@ void VivisectProcessor::processChunk (juce::AudioBuffer<float>& buffer, juce::Mi
     const juce::AudioBuffer<float> inBlock (workBuf.getArrayOfWritePointers(), 2, n);
     const i64 before = specimen.writePos();
     specimen.push (inBlock);
+    if (keyState.load (std::memory_order_acquire) == 1) captureKeyWindow();   // H2
     analysis.transients.process (inBlock, before);
     analysis.spectral.process (specimen, n);
 
@@ -1481,6 +1493,11 @@ void VivisectProcessor::writeMidiMapToState()
 void VivisectProcessor::syncFromStateTree()
 {
     for (auto& c : ccToParam) c.store (-1);
+    {
+        const auto st = apvts.state.getChildWithName (kSettingsTag);
+        const double fb = st.isValid() ? (double) st.getProperty ("tempoFallback", 0.0) : 0.0;
+        tempoFallbackBpm.store (fb > 0.0 ? vsx::TapTempo::clampBpm (fb) : 0.0);
+    }
 
     const auto t = apvts.state.getChildWithName (kSettingsTag);
     parameterLocks.clear();
@@ -2102,6 +2119,68 @@ void VivisectProcessor::UndoGestureListener::parameterGestureChanged (int, bool 
         }
         o.gestureStart.reset();
     }
+}
+
+// ===========================================================================
+//  Tempo and key detection (H1/H2)
+// ===========================================================================
+void VivisectProcessor::setTempoFallback (double bpm)
+{
+    const double v = bpm > 0.0 ? vsx::TapTempo::clampBpm (bpm) : 0.0;
+    tempoFallbackBpm.store (v);
+    settingsTree().setProperty ("tempoFallback", v, nullptr);
+}
+
+double VivisectProcessor::tapTempo()
+{
+    const double bpm = tapper.tap (juce::Time::getMillisecondCounterHiRes() * 0.001);
+    if (bpm > 0.0) setTempoFallback (bpm);
+    return bpm;
+}
+
+void VivisectProcessor::requestKeyDetect()
+{
+    int expected = 0;
+    keyState.compare_exchange_strong (expected, 1);
+}
+
+void VivisectProcessor::captureKeyWindow() noexcept
+{
+    const auto& raw = specimen.raw();
+    const int cap = specimen.capacitySamples();
+    const i64 w = specimen.writePos();
+    const int n = (int) juce::jmin ((i64) kKeyWindow, (i64) cap, w);
+    if (cap <= 0 || raw.getNumChannels() < 2 || keyBuf.size() < (size_t) n) { keyCount.store (0); keyState.store (2, std::memory_order_release); return; }
+    const float* l = raw.getReadPointer (0);
+    const float* r = raw.getReadPointer (1);
+    for (int i = 0; i < n; ++i)
+    {
+        const int idx = (int) (((w - n + i) % cap + cap) % cap);
+        keyBuf[(size_t) i] = 0.5f * (l[idx] + r[idx]);
+    }
+    keyCount.store (n);
+    keyState.store (2, std::memory_order_release);
+}
+
+bool VivisectProcessor::pollKeyDetect()
+{
+    if (keyState.load (std::memory_order_acquire) != 2) return false;
+    keyResult = vsx::keydetect::analyse (keyBuf.data(), keyCount.load(), sampleRate);
+    keyState.store (0, std::memory_order_release);
+    if (! keyResult.valid) return true;
+
+    UndoScope undoStep (*this);
+    auto setChoiceIdx = [this] (const char* pid, int idx)
+    {
+        if (isParameterLocked (pid)) return;
+        if (auto* p = apvts.getParameter (pid))
+            p->setValueNotifyingHost (juce::jlimit (0.f, 1.f, p->getNormalisableRange().convertTo0to1 ((float) idx)));
+    };
+    setChoiceIdx (id::scaleRoot, keyResult.root);
+    setChoiceIdx (id::scaleType, keyResult.minor ? 2 : 1);      // Major = 1, Minor = 2
+    if (! isParameterLocked (id::scaleOn))
+        if (auto* p = apvts.getParameter (id::scaleOn)) p->setValueNotifyingHost (1.f);
+    return true;
 }
 
 // ===========================================================================

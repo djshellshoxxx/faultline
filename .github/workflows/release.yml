@@ -11,7 +11,7 @@ name: Release builds
 #
 # Release tag: v<CMake VERSION>-beta.<N>, where N is the number in
 # release-beta.txt (default 1). Bump that file to cut another beta of the same
-# version. Pushing a tag such as v0.10.0-beta.2 by hand publishes that tag.
+# version. Pushing a tag such as v0.11.0-beta.2 by hand publishes that tag.
 
 on:
   push:

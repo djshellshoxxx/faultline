@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.0-beta.1
+
+Pre-release.
+
+### Added
+- Tap tempo: the header tempo button shows the tempo in use. Click to tap;
+  right-click for double, half or clear. Used when the host sends no tempo
+  (standalone); the host tempo always wins. Saved with the session as a user
+  setting, never part of the sound.
+- DETECT key: under SCALE LOCK. Analyses the last ~1.4 s of the specimen
+  (chromagram + Krumhansl-Schmuckler), sets Scale Root and Scale Type (major
+  or minor), turns Scale Lock on. One undo step; locked controls untouched.
+- Help page, README and spec (SPECS-0.11.0.md) cover both.
+
 ## 0.10.0-beta.1
 
 Pre-release. Published on GitHub as a pre-release, not the latest stable build.

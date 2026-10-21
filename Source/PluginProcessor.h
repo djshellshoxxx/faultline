@@ -2,6 +2,8 @@
 #include <JuceHeader.h>
 #include <array>
 #include <atomic>
+#include "Tempo.h"
+#include "KeyDetect.h"
 #include <deque>
 #include <map>
 #include <memory>
@@ -190,6 +192,26 @@ public:
     void setFirstRunHintDismissed (bool);
     // ==== end MUSICAL (F4) ====
 
+    // ==== TEMPO / KEY (H1/H2) ====
+    // Tempo: the host's tempo always wins. Without one (standalone, some hosts)
+    // the tapped tempo is used, falling back to 120. Tapped tempo is a user
+    // setting (VSX_SETTINGS), never part of the sound state.
+    double tapTempo();                       // message thread; returns the new tempo or 0 (first tap)
+    double tempoFallback() const noexcept { return tempoFallbackBpm.load(); }   // 0 = none set
+    void   setTempoFallback (double bpm);    // 0 clears; otherwise clamped to 20..300
+    double currentBpm() const noexcept { return shownBpm.load(); }
+    bool   hostHasTempo() const noexcept { return hostTempoSeen.load(); }
+    // Key detection: DETECT asks the audio thread for a copy of the last ~1.4 s of
+    // the specimen; pollKeyDetect() (message thread) analyses it and, when a key is
+    // found, sets Scale Root / Scale Type (Major or Minor) and turns Scale Lock on,
+    // as ONE undo step and never touching a locked parameter.
+    void requestKeyDetect();
+    bool keyDetectPending() const noexcept { return keyState.load() != 0; }
+    bool pollKeyDetect();                    // true when a new result was produced
+    vsx::KeyResult lastKeyResult() const noexcept { return keyResult; }
+    static constexpr int kKeyWindow = 1 << 16;
+    // ==== end TEMPO / KEY ====
+
     // -- MIDI learn ---------------------------------------------------------
     void beginMidiLearn (const juce::String& paramID);
     void cancelMidiLearn();
@@ -258,6 +280,17 @@ private:
     double sampleRate = 44100.0;
     double songPos = 0.0;
     double lastBpm = 120.0;
+    // ==== TEMPO / KEY (H1/H2) ====
+    std::atomic<double> tempoFallbackBpm { 0.0 };
+    std::atomic<float>  shownBpm { 120.f };
+    std::atomic<bool>   hostTempoSeen { false };
+    vsx::TapTempo       tapper;
+    std::vector<float>  keyBuf;              // preallocated in prepareToPlay
+    std::atomic<int>    keyState { 0 };      // 0 idle, 1 requested, 2 window copied
+    std::atomic<int>    keyCount { 0 };
+    vsx::KeyResult      keyResult;
+    void captureKeyWindow() noexcept;
+    // ==== end TEMPO / KEY ====
 
     float  decayPhase = 0.f;
     int    panicTimer = 0;
